@@ -1,0 +1,1 @@
+# creates tables on first startup
