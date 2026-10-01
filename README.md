@@ -10,12 +10,11 @@ temperature-observability-service/
 ├── consumer/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   └── app/
-│       ├── main.py         # entrypoint: connect Kafka + DB, run poll loop
-│       ├── schemas.py       # the 5 avro schemas
-│       ├── state.py         # per-experiment tracking, sensor-averaging buffer
-│       ├── notifier.py      # outbound call to notifications-service
-│       └── db.py            # writes: insert measurement, get/set experiment config
+│   ├── main.py          # connect Kafka + DB, run poll loop
+│   ├── state.py         # per-experiment tracking, sensor-averaging buffer
+│   ├── notifier.py      # notifies the notifications-service
+│   └── db.py            # writes: insert measurement, get/set experiment config
+│
 ├── api/
 │   ├── Dockerfile
 │   ├── requirements.txt

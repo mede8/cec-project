@@ -1,1 +1,11 @@
-# File for the docker image
+FROM python:3.11-alpine-sfw-ent-dev
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY *.py .
+
+CMD ["python", "-u", "main.py"]

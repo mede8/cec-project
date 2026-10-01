@@ -3,32 +3,41 @@ services:
     image: postgres:16
     restart: always
     environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
-      POSTGRES_DB: temperature
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 2s
+      retries: 30
 
   consumer:
     build: ./consumer
     restart: on-failure
+    env_file: .env
     environment:
-      DB_HOST: db
-      KAFKA_TOPIC: group12
-      KAFKA_BROKER: <ip>:<port>
-      NOTIFICATIONS_URL: http://notifications-service:3000/api/notify
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    volumes:
+      - ./auth:/app/auth:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   api:
     build: ./api
     restart: on-failure
     environment:
-      DB_HOST: db
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     ports:
-      - "8080:8080"
+      - "3003:3003"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:
