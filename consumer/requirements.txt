@@ -1,0 +1,4 @@
+confluent-kafka
+fastavro
+psycopg2-binary
+requests
