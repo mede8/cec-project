@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres") # check this xd
 
 _INSERT_SQL = """
-    INSERT INTO measurements (experiment_id, measurement_id, timestamp, temperature, out_of_range)
+    INSERT INTO temperatures (experiment_id, measurement_id, ts, temperature, out_of_range)
     VALUES (%s, %s, %s, %s, %s)
     ON CONFLICT (experiment_id, measurement_id) DO NOTHING
 """
