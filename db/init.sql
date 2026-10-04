@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS experiments (
 -- one row for average measurement
 CREATE TABLE IF NOT EXISTS temperatures(
     experiment_id TEXT NOT NULL,
-    measurement_id SERIAL PRIMARY KEY,
+    measurement_id TEXT NOT NULL,
     ts DOUBLE PRECISION NOT NULL,
     temperature DOUBLE PRECISION NOT NULL,
     out_of_range BOOLEAN NOT NULL,
