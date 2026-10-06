@@ -17,13 +17,13 @@ logger = logging.getLogger("consumer")
 
 # env vars
 BROKERS = os.getenv("BROKERS", "kafka.cec.dlandau.nl:19092,kafka.cec.dlandau.nl:29092,kafka.cec.dlandau.nl:39092")
-TOPIC = os.getenv("TOPIC", "topic12") # check which is it xd
-GROUP_ID = os.getenv("GROUP_ID", "group12") # check which is it xd
+TOPIC = os.getenv("TOPIC", "group12")  # check which is it xd
+GROUP_ID = os.getenv("GROUP_ID", "groupid12")  # check which is it xd
 OFFSET_RESET = os.getenv("OFFSET_RESET", "latest")
-SSL_CA_LOCATION = os.getenv("SSL_CA_LOCATION", "./auth/ca.crt") # # check which is it xd
-SSL_KEYSTORE_LOCATION = os.getenv("SSL_KEYSTORE_LOCATION", "./auth/kafka.keystore.pkcs12") # check which is it xd
-SSL_KEYSTORE_PASSWORD = os.getenv("SSL_KEYSTORE_PASSWORD", "cc2023") # check which is it xd
-NOTIFY_WORKERS = int(os.getenv("NOTIFY_WORKERS", "4"))
+SSL_CA_LOCATION = os.getenv("SSL_CA_LOCATION", "./auth/ca.crt")  # # check which is it xd
+SSL_KEYSTORE_LOCATION = os.getenv("SSL_KEYSTORE_LOCATION", "./auth/kafka.keystore.pkcs12")  # check which is it xd
+SSL_KEYSTORE_PASSWORD = os.getenv("SSL_KEYSTORE_PASSWORD", "cc2023")  # check which is it xd
+NOTIFY_WORKERS = int(os.getenv("NOTIFY_WORKERS", "8"))
 
 # c = Consumer({
 #     'bootstrap.servers': 'kafka.cec.dlandau.nl:19092,kafka.cec.dlandau.nl:29092,kafka.cec.dlandau.nl:39092',
@@ -39,12 +39,13 @@ NOTIFY_WORKERS = int(os.getenv("NOTIFY_WORKERS", "4"))
 
 running = True
 
+
 def _stop(signum, frame):
     global running
     running = False
 
+
 def create_consumer() -> Consumer:
-    
     c = Consumer({
         'bootstrap.servers': BROKERS,
         'group.id': GROUP_ID,
@@ -59,10 +60,12 @@ def create_consumer() -> Consumer:
 
     return c
 
+
 def get_record_name(msg) -> str:
     headers = dict(msg.headers() or [])
     raw_name = headers.get("record_name")
     return raw_name.decode('utf-8') if isinstance(raw_name, bytes) else raw_name
+
 
 def process_record(record_name: str, record: dict, conn, pool):
     event = state.handle_event(record_name, record)
@@ -76,9 +79,10 @@ def process_record(record_name: str, record: dict, conn, pool):
             logger.warning("unknown action: %s", action)
     return conn
 
+
 # @click.command()
 # @click.argument('topic')
-#def consume(topic: str):
+# def consume(topic: str):
 def consume():
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
@@ -110,11 +114,11 @@ def consume():
                 logger.error("fail to decode %s: %s", record_name, e)
                 continue
 
-            print(record_name) # remove later
+            print(record_name)  # remove later
             for record in records:
                 try:
                     conn = process_record(record_name, record, conn, pool)
-                    print(record) # remove later
+                    print(record)  # remove later
                 except Exception as e:
                     logger.error("failed to process %s: %s (%s)", record_name, record, e)
     finally:
@@ -122,6 +126,7 @@ def consume():
         consumer.close()
         pool.shutdown(wait=True)
         conn.close()
+
 
 # consume()
 if __name__ == "__main__":

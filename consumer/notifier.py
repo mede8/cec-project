@@ -4,7 +4,7 @@ import logging
 
 
 logger = logging.getLogger(__name__)
-NOTIFY_URL = os.getenv("NOTIFY_URL", "http://notification-service:3000/api/notify")
+NOTIFY_URL = os.getenv("NOTIFY_URL", "http://host.docker.internal:3000/api/notify")
 NOTIFY_TOKEN = os.getenv("NOTIFY_TOKEN", "")
 _session = requests.Session()
 
