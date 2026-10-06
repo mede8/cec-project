@@ -30,7 +30,8 @@ def notify(notification_type: str, experiment_id: str, researcher: str, measurem
         try:
             response = _session.post(NOTIFY_URL, params=params, json=body, timeout=5)
             response.raise_for_status()
-            logger.info("notfied %s %s latency=%s", notification_type, measurement_id, response.text)
+            logger.info("notify %s %s -> %s %s", body["notification_type"], body["measurement_id"],
+                        response.status_code, response.text)
             return
         except requests.RequestException as e:
             logger.warning("notify attempt %d failed: %s", attempt + 1, e)
