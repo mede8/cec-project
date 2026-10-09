@@ -24,3 +24,11 @@ temperature-observability-service/
 └── db/
     └── init.sql             # creates tables on first startup
 ```
+
+### Improvements for Final Stage
+    - Implement API Gateway to decrease response time: Kubernetes
+    - Implement Load Balancer (?)
+    - Save config of experiments in DB (?)
+    - Prometheus (add it on main branch)
+    - Multiple consumers
+    - Research is multiple DB works (?)
