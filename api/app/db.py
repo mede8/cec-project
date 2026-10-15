@@ -40,11 +40,45 @@ def _configure(conn) -> None:
     conn.execute("SET default_transaction_read_only = on")
 
 
+class PoolSizeError(RuntimeError):
+    """The configured workers x pool size would use too many connections."""
+
+
+def pool_plan(env=os.environ) -> dict:
+    """How many database connections each uvicorn worker may open.
+
+    Every worker process has its own pool, so the API can hold up to
+    workers x pool_size connections. Postgres allows 100 by default and the
+    consumer, psql sessions and health checks need some too, so all API
+    workers together must stay within DB_CONNECTION_BUDGET (default 50).
+
+    DB_POOL_SIZE sets the pool size explicitly; otherwise the budget is
+    split between the workers (at most 10 each, which is plenty for one
+    worker: a request holds a connection only for its single query).
+    """
+    workers = int(env.get("WEB_CONCURRENCY") or 1)
+    budget = int(env.get("DB_CONNECTION_BUDGET") or 50)
+    if workers < 1:
+        raise PoolSizeError("WEB_CONCURRENCY must be at least 1")
+    explicit = env.get("DB_POOL_SIZE")
+    size = int(explicit) if explicit else min(10, budget // workers)
+    if size < 2:
+        raise PoolSizeError(
+            f"{workers} workers leave fewer than 2 connections each within "
+            f"DB_CONNECTION_BUDGET={budget}: use fewer workers or a larger budget")
+    if workers * size > budget:
+        raise PoolSizeError(
+            f"{workers} workers x DB_POOL_SIZE={size} = {workers * size} connections "
+            f"exceeds DB_CONNECTION_BUDGET={budget}")
+    return {"workers": workers, "pool_size": size, "total": workers * size, "budget": budget}
+
+
 def create_pool() -> ConnectionPool:
+    plan = pool_plan()
     pool = ConnectionPool(
         conninfo=database_url(),
         min_size=1,
-        max_size=int(os.getenv("DB_POOL_SIZE", "10")),
+        max_size=plan["pool_size"],
         # A request waits at most this long for a connection, then gets 503.
         timeout=float(os.getenv("DB_REQUEST_TIMEOUT", "5")),
         kwargs={
@@ -54,10 +88,23 @@ def create_pool() -> ConnectionPool:
             "options": f"-c statement_timeout={int(os.getenv('DB_STATEMENT_TIMEOUT_MS', '5000'))}",
         },
         configure=_configure,
+        # Test each connection before lending it out (one tiny round trip), so
+        # connections broken by a database restart are replaced silently
+        # instead of failing one request each.
+        check=ConnectionPool.check_connection,
         open=True,
     )
     # Fail fast at startup if the database is unreachable; compose restarts us.
     pool.wait(timeout=float(os.getenv("DB_CONNECT_TIMEOUT", "30")))
+    # The budget only helps if it really is below the server's limit.
+    with pool.connection() as conn:
+        server_max = int(conn.execute("SHOW max_connections").fetchone()["max_connections"])
+    if plan["total"] >= server_max:
+        pool.close()
+        raise PoolSizeError(
+            f"API may open {plan['total']} connections but Postgres max_connections "
+            f"is {server_max}: lower WEB_CONCURRENCY or DB_POOL_SIZE")
+    pool.plan = {**plan, "postgres_max_connections": server_max}
     return pool
 
 
