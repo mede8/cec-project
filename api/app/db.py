@@ -113,13 +113,9 @@ def ping(pool: ConnectionPool) -> None:
         conn.execute("SELECT 1")
 
 
-# ---------------------------------------------------------------- temperatures
-
 # The two required endpoints can return thousands of rows and are queried
-# 100-200 times per second by the course's load generator. Postgres builds
-# the JSON array itself (json_agg), so Python only passes the text through.
-# float8 values are written in their shortest exact form, so timestamps
-# round-trip bit-for-bit, which is what the grader compares.
+# Postgres builds the JSON array itself, so Python only passes the text through.
+# Keeping float8 serialization in Postgres preserves timestamp precision.
 
 def _json_points(where: str) -> str:
     return f"""
@@ -191,8 +187,6 @@ def temperature_series(pool, experiment_id: str, start: float, end: float,
             {"exp": experiment_id, "start": start, "end": end, "iv": interval},
         ).fetchall()
 
-
-# ---------------------------------------------------------------- experiments
 
 _EXPERIMENT_COLUMNS = """experiment_id, researcher, sensors,
                          lower_threshold, upper_threshold, phase"""
