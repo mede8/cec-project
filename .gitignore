@@ -1,3 +1,7 @@
 auth/
 .env
 __pycache__/
+.pytest_cache
+producer/producer.env
+producer/sqlx.env
+producer/auth/

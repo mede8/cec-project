@@ -7,6 +7,7 @@ import signal
 import db
 import notifier
 import state
+import time  # for calculating lag
 
 from confluent_kafka import Consumer
 from fastavro import reader
@@ -94,6 +95,9 @@ def consume():
     consumer.subscribe([TOPIC], on_assign=lambda _, p_list: logger.info("assigned: %s", p_list))
     logger.info("subscribed to %s, groupid %s", TOPIC, GROUP_ID)
 
+    # for the lag duration
+    last_lag_log = 0.0
+
     try:
         while running:
             msg = consumer.poll(1.0)
@@ -104,21 +108,19 @@ def consume():
                 continue
 
             record_name = get_record_name(msg)
-
             try:
                 records = list(reader(io.BytesIO(msg.value())))
-                print(records)
-                for record in records:
-                    print(record)
+                # print(records)
             except Exception as e:
                 logger.error("fail to decode %s: %s", record_name, e)
                 continue
 
-            print(record_name)  # remove later
             for record in records:
+                if record_name == "sensor_temperature_measured" and time.time() - last_lag_log > 5:
+                    logger.info("lag %.2fs", time.time() - record['timestamp'])
+                    last_lag_log = time.time()
                 try:
                     conn = process_record(record_name, record, conn, pool)
-                    print(record)  # remove later
                 except Exception as e:
                     logger.error("failed to process %s: %s (%s)", record_name, record, e)
     finally:
