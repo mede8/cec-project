@@ -97,6 +97,7 @@ def consume():
 
     # for the lag duration
     last_lag_log = 0.0
+    max_lag = 0.0
 
     try:
         while running:
@@ -116,9 +117,12 @@ def consume():
                 continue
 
             for record in records:
-                if record_name == "sensor_temperature_measured" and time.time() - last_lag_log > 5:
-                    logger.info("lag %.2fs", time.time() - record['timestamp'])
-                    last_lag_log = time.time()
+                if record_name == "sensor_temperature_measured":
+                    max_lag = max(max_lag, time.time() - record["timestamp"])
+                    if time.time() - last_lag_log > 5:
+                        logger.info("lag %.2fs", max_lag)
+                        max_lag = 0.0
+                        last_lag_log = time.time()
                 try:
                     conn = process_record(record_name, record, conn, pool)
                 except Exception as e:

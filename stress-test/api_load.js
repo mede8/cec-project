@@ -1,6 +1,8 @@
 // k6 load test for the Temperature Observability REST API
 // Verify test (30 s at 5 requests/s, checks whether the script works)
 // Stress test (~8 min, ramps to 90 then 180 requests/s)
+// reference: https://blog.hobosuit.com/arkade-load-testing-with-k6/
+
 import http from 'k6/http';
 import { check } from 'k6';
 
