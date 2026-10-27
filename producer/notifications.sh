@@ -1,7 +1,7 @@
 #!/bin/bash
 # for running the notifications-service locally
 set -e
-cd "$(dirname, "$0")"
+cd "$(dirname "$0")"
 source ./producer.env
 
 docker run --rm -d --name notifications-service \
