@@ -22,12 +22,12 @@ const stress = {
     preAllocatedVUs: 100,  // virtual users
     maxVUs: 1500,
     stages: [
-        { target: 200, duration: '1m' },
-        { target: 200, duration: '1m' },
-        { target: 500, duration: '1m' },
-        { target: 500, duration: '2m' },
         { target: 1000, duration: '1m' },
-        { target: 1000, duration: '3m' },
+        // { target: 1000, duration: '1m' },
+        // { target: 500, duration: '1m' },
+        // { target: 500, duration: '2m' },
+        // { target: 1000, duration: '1m' },
+        // { target: 1000, duration: '3m' },
         { target: 0, duration: '30s' },
     ],
 };
