@@ -23,7 +23,6 @@ stores.
 
 import logging
 import math
-import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -96,11 +95,7 @@ class Health(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.pool = db.create_pool()
-    p = app.state.pool.plan
-    log.info("worker pid=%s connected to the database: pool max %d "
-             "(%d workers x %d = %d of budget %d; Postgres max_connections=%d)",
-             os.getpid(), p["pool_size"], p["workers"], p["pool_size"], p["total"],
-             p["budget"], p["postgres_max_connections"])
+    log.info("connected to the database")
     try:
         yield
     finally:
