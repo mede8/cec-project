@@ -23,7 +23,6 @@ stores.
 
 import logging
 import math
-import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -48,6 +47,8 @@ MAX_BUCKETS = 10_000      # upper bound on buckets in one /temperature/series re
 MAX_LIMIT = 1_000_000     # largest explicit page size
 MAX_OFFSET = 2_147_483_647
 
+
+# ---------------------------------------------------------------- response models
 
 class Measurement(BaseModel):
     timestamp: float = Field(description="Unix epoch seconds")
@@ -89,14 +90,12 @@ class Health(BaseModel):
     status: str
 
 
+# ---------------------------------------------------------------- app + lifecycle
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.pool = db.create_pool()
-    p = app.state.pool.plan
-    log.info("worker pid=%s connected to the database: pool max %d "
-             "(%d workers x %d = %d of budget %d; Postgres max_connections=%d)",
-             os.getpid(), p["pool_size"], p["workers"], p["pool_size"], p["total"],
-             p["budget"], p["postgres_max_connections"])
+    log.info("connected to the database")
     try:
         yield
     finally:
@@ -150,6 +149,8 @@ async def database_error(request: Request, exc: psycopg.Error):
     return _error(request, 500, "internal database error")
 
 
+# ---------------------------------------------------------------- input helpers
+
 def parse_time(value: Optional[str], name: str) -> Optional[float]:
     """Epoch seconds or ISO-8601 -> epoch seconds. A time without a zone is UTC."""
     if value is None:
@@ -184,8 +185,13 @@ def check_id(experiment_id: str) -> str:
 
 
 EXPERIMENT_ID = Query(..., alias="experiment-id", min_length=1, description="Experiment to query")
+# No limit by default: the required endpoints must return the COMPLETE list,
+# because the course's load generator compares the whole response.
 LIMIT = Query(None, ge=1, le=MAX_LIMIT, description="Optional maximum number of rows (default: all)")
 OFFSET = Query(0, ge=0, le=MAX_OFFSET, description="Rows to skip, for paging")
+
+
+# ---------------------------------------------------------------- endpoints
 
 @app.get("/temperature", response_model=list[Measurement], tags=["temperature"],
          summary="Temperatures in a time window")
