@@ -19,13 +19,15 @@ const stress = {
     executor: 'ramping-arrival-rate',
     startRate: 10,
     timeUnit: '1s',
-    preAllocatedVUs: 50,  // virtual users
-    maxVUs: 400,
+    preAllocatedVUs: 100,  // virtual users
+    maxVUs: 1500,
     stages: [
-        { target: 90, duration: '1m' },
-        { target: 90, duration: '3m' },  // is it stable at 90 requests/s?
-        { target: 180, duration: '1m' },  // push to double
-        { target: 180, duration: '2m' },  // where does it start to break?
+        { target: 200, duration: '1m' },
+        { target: 200, duration: '1m' },
+        { target: 500, duration: '1m' },
+        { target: 500, duration: '2m' },
+        { target: 1000, duration: '1m' },
+        { target: 1000, duration: '3m' },
         { target: 0, duration: '30s' },
     ],
 };
@@ -33,6 +35,7 @@ const stress = {
 export const options = {
     scenarios: { api: __ENV.VERIFY ? verify : stress},
     // pass/ fail criteria
+    setupTimeout: '2m',
     thresholds: {
         http_req_failed: ['rate<0.01'],  // < 1% errors overall
         'http_req_duration{name:temperature}': ['p(95)<300'],  // 95% under 300 ms per endpoint
@@ -46,20 +49,31 @@ export function setup() {
     const res = http.get(`${BASE}/experiments?limit=500`);
     const ids = res.json().map((e) => e.experiment_id);
     if (ids.length === 0) throw new Error('No experiments in the database - run the producer first');
-    return { ids };
+
+    const now = Date.now() / 1000;
+    const exps = [];
+    for (const id of ids) {
+        const pts = http.get(`${BASE}/temperature?experiment-id=${id}&start-time=0&end-time=${now}`, { tags: { name: 'setup' } }).json();
+        if (Array.isArray(pts) && pts.length > 1) {
+            exps.push({ id, first: pts[0].timestamp, last: pts[pts.length - 1].timestamp });
+        }
+    }
+    if (exps.length === 0) throw new Error('No experiments with stored measurements yet');
+    return { exps };
 }
 
 // one iteration
 export default function (data) {
-    const id = data.ids[Math.floor(Math.random() * data.ids.length)];
+    const e = data.exps[Math.floor(Math.random() * data.exps.length)];
     let res;
     if (Math.random() < 0.5) {
-        res = http.get(`${BASE}/temperature/out-of-range?experiment-id=${id}`,
+        res = http.get(`${BASE}/temperature/out-of-range?experiment-id=${e.id}`,
             { tags: { name: 'out-of-range' } }
         );
     } else {
-        const end = Date.now() / 1000;
-        res = http.get(`${BASE}/temperature?experiment-id=${id}&start-time=0&end-time=${end}`,
+        const start = e.first + Math.random() * Math.max(0, e.last - e.first - 10);
+        const end = start + 2 + Math.random() * 8;
+        res = http.get(`${BASE}/temperature?experiment-id=${e.id}&start-time=${start}&end-time=${end}`,
             { tags: { name: 'temperature' } }
         );
         check(res, {

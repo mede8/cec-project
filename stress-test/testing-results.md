@@ -87,6 +87,7 @@ To stress-test the system on both the consumer and API, we use the respective co
 python3 producer/config_generator.py 100 && ./producer/experiment.sh
 # wait for a few minutes to consume some experiments and then test the API
 k6 run -e BASE_URL=http://localhost:3003 --summary-export=summary-combined.json stress-test/api_load.js
+k6 run -e BASE_URL=http://<vm-ip>:3003 --out csv=stress-test/results/stress-1000.csv stress-test/api_load.js
 ```
 
 In all the cases above, the logs offer the information needed to determine whether the service passes the tests. However, to analyse the important aspects, we created a monitoring script for the logs and a respective Python file that analyses the generated monitoring files. Before running any testing, run the `monitor.sh`:
