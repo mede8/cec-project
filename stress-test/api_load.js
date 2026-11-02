@@ -1,6 +1,8 @@
 // k6 load test for the Temperature Observability REST API
-// Verify test (30 s at 5 requests/s, checks whether the script works)
-// Stress test (~8 min, ramps to 90 then 180 requests/s)
+// -e VERIFY=1     30 s at 5 requests/s: does the script work?
+// default (step)  staircase 200 -> 400 -> 600 -> 800 -> 1000 requests/s, 1 min hold per step
+//                 (~10 min): shows at which rate the API breaks
+// -e MODE=hold    30 s ramp, then 1000 requests/s for 3 min: does it HOLD the target?
 // reference: https://blog.hobosuit.com/arkade-load-testing-with-k6/
 
 import http from 'k6/http';
@@ -15,25 +17,24 @@ const verify = {
     preAllocatedVUs: 5,
 };
 
+// Open model: k6 starts `target` requests per second whether or not earlier ones
+// have finished. If all VUs are busy waiting, k6 counts a dropped_iteration.
+const step = (rate) => [{ target: rate, duration: '30s' }, { target: rate, duration: '1m' }];
+
 const stress = {
     executor: 'ramping-arrival-rate',
-    startRate: 10,
+    startRate: 50,
     timeUnit: '1s',
-    preAllocatedVUs: 100,  // virtual users
+    preAllocatedVUs: 200,  // virtual users
     maxVUs: 1500,
-    stages: [
-        { target: 1000, duration: '1m' },
-        // { target: 1000, duration: '1m' },
-        // { target: 500, duration: '1m' },
-        // { target: 500, duration: '2m' },
-        // { target: 1000, duration: '1m' },
-        // { target: 1000, duration: '3m' },
-        { target: 0, duration: '30s' },
-    ],
+    stages: __ENV.MODE === 'hold'
+        ? [{ target: 1000, duration: '30s' }, { target: 1000, duration: '3m' }, { target: 0, duration: '15s' }]
+        : [...step(200), ...step(400), ...step(600), ...step(800), ...step(1000),
+           { target: 0, duration: '15s' }],
 };
 
 export const options = {
-    scenarios: { api: __ENV.VERIFY ? verify : stress},
+    scenarios: { api: __ENV.VERIFY ? verify : stress },
     // pass/ fail criteria
     setupTimeout: '2m',
     thresholds: {
@@ -76,10 +77,10 @@ export default function (data) {
         res = http.get(`${BASE}/temperature?experiment-id=${e.id}&start-time=${start}&end-time=${end}`,
             { tags: { name: 'temperature' } }
         );
-        check(res, {
-            'status is 200': (r) => r.status === 200,
-            'body is a JSON list': (r) => { try { return Array.isArray(r.json()); } catch (_) { return false; } },
-        });
-
     }
+    // checked for BOTH endpoints (before, only /temperature was checked)
+    check(res, {
+        'status is 200': (r) => r.status === 200,
+        'body is a JSON list': (r) => { try { return Array.isArray(r.json()); } catch (_) { return false; } },
+    });
 }
