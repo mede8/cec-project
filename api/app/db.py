@@ -41,7 +41,7 @@ def _configure(conn) -> None:
 
 
 def create_pool() -> ConnectionPool:
-    size = int(os.getenv("DB_POOL_SIZE", "10"))
+    size = int(os.getenv("API_POOL_SIZE", "8"))
     pool = ConnectionPool(
         conninfo=database_url(),
         min_size=size,

@@ -15,6 +15,7 @@ services:
       retries: 30
 
   consumer:
+    cpu_shares: 4096
     build: ./consumer
     restart: on-failure
     env_file: .env
@@ -29,6 +30,7 @@ services:
         condition: service_healthy
 
   api:
+    cpu_shares: 512
     build: ./api
     restart: on-failure
     environment:
