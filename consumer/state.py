@@ -65,12 +65,25 @@ def handle_event(record_name: str, event: dict) -> list:
                         "researcher": exp["researcher"],
                         "experiment_id": exp_id,
                         "measurement_id": mid,
-                        "cipher_data": slot["hash"]
+                        "cipher_data": slot["hash"],
+                        "timestamp": slot["timestamp"]
                     }
                 ))
 
         elif exp["phase"] == "running":
             # notify the researcher when the temperature goes out of range
+            if not in_range and not exp.get("was_out_of_range"):
+                todo.append((
+                    "notify", {
+                        "notification_type": "OutOfRange",
+                        "researcher": exp["researcher"],
+                        "experiment_id": exp_id,
+                        "measurement_id": mid,
+                        "cipher_data": slot["hash"],
+                        "timestamp": slot["timestamp"]
+                    }
+                ))
+            # save the measurement in the database
             todo.append((
                  "save", {
                      "experiment_id": exp_id,
@@ -80,22 +93,9 @@ def handle_event(record_name: str, event: dict) -> list:
                      "out_of_range": not in_range
                  }
              ))
-            if not in_range and not exp.get("was_out_of_range"):
-                todo.append((
-                    "notify", {
-                        "notification_type": "OutOfRange",
-                        "researcher": exp["researcher"],
-                        "experiment_id": exp_id,
-                        "measurement_id": mid,
-                        "cipher_data": slot["hash"]
-                    }
-                ))
             exp["was_out_of_range"] = not in_range
 
     elif record_name == "experiment_terminated":
-        exp = experiments.get(exp_id)
-        if exp:
-            exp["phase"] = "terminated"
-        del experiments[exp_id]
+        experiments.pop(exp_id, None)
 
     return todo

@@ -17,5 +17,10 @@ CREATE TABLE IF NOT EXISTS temperatures(
     PRIMARY KEY (experiment_id, measurement_id)
 );
 
--- range scan by time, and filter on out_of_range
-CREATE INDEX IF NOT EXISTS idx_temp_exp_ts ON temperatures (experiment_id, ts);
+DROP INDEX IF EXISTS idx_temp_exp_ts;
+
+-- /temperature: one experiment's readings in a time window
+CREATE INDEX IF NOT EXISTS idx_temp_exp_ts ON temperatures (experiment_id, ts, measurement_id) INCLUDE (temperature);
+
+-- /temperature/out-of-range: for rows flagged out of range
+CREATE INDEX IF NOT EXISTS idx_temp_oor ON temperatures (experiment_id, ts, measurement_id) INCLUDE (temperature) WHERE out_of_range;
