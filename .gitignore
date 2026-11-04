@@ -5,3 +5,4 @@ __pycache__/
 producer/producer.env
 producer/sqlx.env
 producer/auth/
+stress-testing.md

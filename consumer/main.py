@@ -96,8 +96,8 @@ def consume():
     logger.info("subscribed to %s, groupid %s", TOPIC, GROUP_ID)
 
     # for the lag duration
-    last_lag_log = 0.0
-    max_lag = 0.0
+    lags = []
+    last_lag_log = time.time()
 
     try:
         while running:
@@ -118,11 +118,14 @@ def consume():
 
             for record in records:
                 if record_name == "sensor_temperature_measured":
-                    max_lag = max(max_lag, time.time() - record["timestamp"])
-                    if time.time() - last_lag_log > 5:
-                        logger.info("lag %.2fs", max_lag)
-                        max_lag = 0.0
-                        last_lag_log = time.time()
+                    now = time.time()
+                    lags.append(now - record['timestamp'])
+                    if now - last_lag_log >= 5:
+                        lags.sort()
+                        logger.info("lag avg=%.3fs p95=%.3fs max=%.3fs n=%d",
+                                    sum(lags) / len(lags), lags[int((len(lags) - 1) * 0.95)], lags[-1], len(lags))
+                        lags = []
+                        last_lag_log = now
                 try:
                     conn = process_record(record_name, record, conn, pool)
                 except Exception as e:
