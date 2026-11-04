@@ -23,12 +23,14 @@ stores.
 
 import logging
 import math
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
+import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 import psycopg
@@ -46,6 +48,8 @@ log = logging.getLogger("api")
 MAX_BUCKETS = 10_000      # upper bound on buckets in one /temperature/series response
 MAX_LIMIT = 1_000_000     # largest explicit page size
 MAX_OFFSET = 2_147_483_647
+THREADS = int(os.getenv("THREADS", "40"))        # worker threads per process (default is 40)
+SLOW_MS = float(os.getenv("SLOW_MS", "200"))     # requests slower than this are logged
 
 
 # ---------------------------------------------------------------- response models
@@ -94,8 +98,12 @@ class Health(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # sync endpoints run in a thread pool
+    # default = 40 threads
+    anyio.to_thread.current_default_thread_limiter().total_tokens = THREADS
+
     app.state.pool = db.create_pool()
-    log.info("connected to the database")
+    log.info("connected to the database (threads=%d)", THREADS)
     try:
         yield
     finally:
@@ -107,21 +115,44 @@ app = FastAPI(title="Temperature Observability API", version="1.0.0",
               lifespan=lifespan)
 
 
-@app.middleware("http")
-async def request_context(request: Request, call_next):
-    """Attach a request ID (echoed in X-Request-ID) and log one line per request."""
-    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
-    request.state.request_id = request_id
-    start = time.perf_counter()
-    status = 500
-    try:
-        response = await call_next(request)
-        status = response.status_code
-        response.headers["X-Request-ID"] = request_id
-        return response
-    finally:
-        log.info("request_id=%s %s %s -> %s (%.1f ms)", request_id, request.method,
-                 request.url.path, status, (time.perf_counter() - start) * 1000)
+class RequestContext:
+    """
+    attaches a request ID (echoed in X-Request-ID) and log slow/failed requests
+    replace @app.middleware("http") so it doesn't wrap response in streaming layer
+    (bc of large JSON bodies when having lots of requests))
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        rid = next((v.decode("latin-1") for k, v in scope["headers"] if k == b"x-request-id"),
+                   None) or uuid.uuid4().hex
+        scope.setdefault("state", {})["request_id"] = rid   # read by request.state.request_id
+        start, status = time.perf_counter(), 500
+
+        async def send_wrapper(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                message["headers"] = [*message.get("headers", []),
+                                      (b"x-request-id", rid.encode("latin-1", "replace"))]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            ms = (time.perf_counter() - start) * 1000
+            if status >= 500 or ms > SLOW_MS:
+                log.warning("request_id=%s %s %s -> %s (%.1f ms)", rid, scope["method"],
+                            scope["path"], status, ms)
+
+
+app.add_middleware(RequestContext)
 
 
 def _error(request: Request, status: int, detail: str) -> JSONResponse:
@@ -185,7 +216,7 @@ def check_id(experiment_id: str) -> str:
 
 
 EXPERIMENT_ID = Query(..., alias="experiment-id", min_length=1, description="Experiment to query")
-# No limit by default: the required endpoints must return the COMPLETE list,
+# no limit by default: the required endpoints must return the COMPLETE list,
 # because the course's load generator compares the whole response.
 LIMIT = Query(None, ge=1, le=MAX_LIMIT, description="Optional maximum number of rows (default: all)")
 OFFSET = Query(0, ge=0, le=MAX_OFFSET, description="Rows to skip, for paging")

@@ -33,6 +33,7 @@ services:
     restart: on-failure
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      WEB_CONCURRENCY: "4"
     ports:
       - "3003:3003"
     depends_on:

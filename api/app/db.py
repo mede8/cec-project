@@ -41,10 +41,11 @@ def _configure(conn) -> None:
 
 
 def create_pool() -> ConnectionPool:
+    size = int(os.getenv("DB_POOL_SIZE", "10"))
     pool = ConnectionPool(
         conninfo=database_url(),
-        min_size=1,
-        max_size=int(os.getenv("DB_POOL_SIZE", "10")),
+        min_size=size,
+        max_size=size,
         # A request waits at most this long for a connection, then gets 503.
         timeout=float(os.getenv("DB_REQUEST_TIMEOUT", "5")),
         kwargs={
@@ -69,19 +70,16 @@ def ping(pool: ConnectionPool) -> None:
 # ---------------------------------------------------------------- temperatures
 
 # The two required endpoints can return thousands of rows and are queried
-# 100-200 times per second by the course's load generator. Postgres builds
+# 1000 times per second by the course's load generator. Postgres builds
 # the JSON array itself (json_agg), so Python only passes the text through.
 # float8 values are written in their shortest exact form, so timestamps
 # round-trip bit-for-bit, which is what the grader compares.
 
 def _json_points(where: str) -> str:
     return f"""
-        SELECT coalesce(
-                 json_agg(json_build_object('timestamp', ts, 'temperature', temperature)
-                          ORDER BY ts, measurement_id),
-                 '[]')::text AS body
+        SELECT coalesce(json_agg(page), '[]')::text AS body
         FROM (
-            SELECT ts, temperature, measurement_id
+            SELECT ts AS "timestamp", temperature
             FROM temperatures
             WHERE {where}
             ORDER BY ts, measurement_id
@@ -91,10 +89,17 @@ def _json_points(where: str) -> str:
 
 
 _TEMPERATURE_JSON = _json_points("experiment_id = %(exp)s AND ts BETWEEN %(start)s AND %(end)s")
-_OUT_OF_RANGE_JSON = _json_points(
-    "experiment_id = %(exp)s AND out_of_range"
-    " AND (%(start)s::float8 IS NULL OR ts >= %(start)s)"
-    " AND (%(end)s::float8   IS NULL OR ts <= %(end)s)")
+_OUT_OF_RANGE_JSON = {
+    (has_start, has_end): _json_points(
+        " AND ".join(
+            ["experiment_id = %(exp)s", "out_of_range"]
+            + (["ts >= %(start)s"] if has_start else [])
+            + (["ts <= %(end)s"] if has_end else [])
+        )
+    )
+    for has_start in (False, True)
+    for has_end in (False, True)
+}
 
 
 def temperatures_in_range(pool, experiment_id: str, start: float, end: float,
@@ -115,8 +120,9 @@ def out_of_range_temperatures(pool, experiment_id: str, start: Optional[float],
     The API trusts that flag instead of recomputing it, so the API and the
     notifications the consumer sends always agree.
     """
+    sql = _OUT_OF_RANGE_JSON[(start is not None, end is not None)]
     with pool.connection() as conn:
-        return conn.execute(_OUT_OF_RANGE_JSON, {"exp": experiment_id, "start": start, "end": end,
+        return conn.execute(sql, {"exp": experiment_id, "start": start, "end": end,
                                                  "limit": limit, "offset": offset}).fetchone()["body"]
 
 
