@@ -50,6 +50,8 @@ MAX_BUCKETS = 10_000      # buckets in 1 /temperature/series response
 MAX_LIMIT = 1_000_000     # largest page size
 MAX_OFFSET = 2_147_483_647
 SLOW_MS = float(os.getenv("SLOW_MS", "200"))     # log req slower than this
+MAX_IN_FLIGHT = int(os.getenv("MAX_IN_FLIGHT", "64"))
+in_flight = 0
 
 
 # response models
@@ -122,13 +124,20 @@ class RequestContext:
         self.app = app
 
     async def __call__(self, scope, receive, send):
+        global in_flight
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        rid = next((v.decode("latin-1") for k, v in scope["headers"] if k == b"x-request-id"),
-                   None) or uuid.uuid4().hex
+        if in_flight >= MAX_IN_FLIGHT:
+            # too many requests in flight, reject with 503
+            timing.record("rejected", 0)
+            await send({"type": "http.response.start", "status": 503,
+                        "headers": [(b"content-type", b"text/plain"), (b"content-length", b"4")]})
+            await send({"type": "http.response.body", "body": b"busy"})
+            return
 
+        rid = next((v.decode("latin-1") for k, v in scope["headers"] if k == b"x-request-id"), None) or uuid.uuid4().hex
         scope.setdefault("state", {})["request_id"] = rid   # read by request.state.request_id
         start, status = time.perf_counter(), 500
 
@@ -136,13 +145,14 @@ class RequestContext:
             nonlocal status
             if message["type"] == "http.response.start":
                 status = message["status"]
-                message["headers"] = [*message.get("headers", []),
-                                      (b"x-request-id", rid.encode("latin-1", "replace"))]
+                message["headers"] = [*message.get("headers", []), (b"x-request-id", rid.encode("latin-1", "replace"))]
             await send(message)
 
+        in_flight += 1
         try:
             await self.app(scope, receive, send_wrapper)
         finally:
+            in_flight -= 1
             ms = (time.perf_counter() - start) * 1000
             if scope["path"].startswith("/temperature"):
                 timing.record("app_total", ms)

@@ -65,6 +65,11 @@ export function setup() {
 
 // one iteration
 export default function (data) {
+    if (__ENV.PING) {
+        const r = http.get(`${BASE}/health/live`, { tags: { name: 'ping' } });
+        check(r, { 'status is 200': (x) => x.status === 200 });
+        return;
+    }
     const e = data.exps[Math.floor(Math.random() * data.exps.length)];
     let res;
     if (Math.random() < 0.5) {

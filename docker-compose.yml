@@ -35,9 +35,11 @@ services:
     restart: on-failure
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      WEB_CONCURRENCY: "4"
+      WEB_CONCURRENCY: "2"
       API_POOL_SIZE: ${API_POOL_SIZE:-5}
       DB_REQUEST_TIMEOUT: ${DB_REQUEST_TIMEOUT:-1}
+      MAX_IN_FLIGHT: ${MAX_IN_FLIGHT:-64}
+      SLOW_MS: ${SLOW_MS:-2000}
     ports:
       - "3003:3003"
     depends_on:
