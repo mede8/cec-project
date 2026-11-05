@@ -264,8 +264,13 @@ async def get_temperature(
 
     # this needs to be checked, otherwise set TTL_S to 0.25
     if end < time.time() - 2:
+        # closed window: cannot change any more, safe to cache
         body, hit = await cache.get_or_load(("temp", experiment_id, start, end, limit, offset), load)
-    timing.record("cache_hit" if hit else "cache_miss", 0)
+        timing.record("cache_hit" if hit else "cache_miss", 0)
+    else:
+        # open window, always query
+        body = await load()
+        timing.record("cache_bypass", 0)
     return Response(content=body, media_type="application/json")   # JSON built by Postgres
 
 
