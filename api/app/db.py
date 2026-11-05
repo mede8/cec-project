@@ -10,11 +10,14 @@ queries are parameterised (%s) => prevent sql injection
 """
 
 import os
+import time
+import logging
 from typing import Optional
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+log = logging.getLogger("api.db")
 
 def database_url() -> str:
     """
@@ -77,8 +80,7 @@ async def ping(pool: AsyncConnectionPool) -> None:
     ping db asynchronously to check if it is reachable
     """
     async with pool.connection() as conn:
-        conn.execute("SELECT 1")
-
+        await conn.execute("SELECT 1")
 
 # ---------------------------------------------------------------- temperatures
 
@@ -202,7 +204,7 @@ async def get_experiment(pool, experiment_id: str) -> Optional[dict]:
     if row is not None:
         return row
     
-    if experiment_known(pool, experiment_id):
+    if await experiment_known(pool, experiment_id):
         return {"experiment_id": experiment_id, "researcher": None, "sensors": None,
                 "lower_threshold": None, "upper_threshold": None, "phase": None}
     return None
