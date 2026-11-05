@@ -8,7 +8,6 @@ api only reads from 2 tables:
 
 queries are parameterised (%s) => prevent sql injection
 """
-
 import os
 import time
 import logging
@@ -17,7 +16,11 @@ from typing import Optional
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from . import timing
+
+
 log = logging.getLogger("api.db")
+
 
 def database_url() -> str:
     """
@@ -68,7 +71,8 @@ async def create_pool() -> AsyncConnectionPool:
         configure=_configure,
         open=False,
     )
-    await pool.open() # open pool
+    # open pool
+    await pool.open()
     # if db is unreachable fail at startup, docker compose restart
     await pool.wait(timeout=float(os.getenv("DB_CONNECT_TIMEOUT", "30")))
 
@@ -82,8 +86,8 @@ async def ping(pool: AsyncConnectionPool) -> None:
     async with pool.connection() as conn:
         await conn.execute("SELECT 1")
 
-# ---------------------------------------------------------------- temperatures
 
+# temperatures
 def _json_points(where: str) -> str:
     """
     query to return JSON of readings from a specific where from temperatures table
@@ -99,6 +103,7 @@ def _json_points(where: str) -> str:
         ) AS page
     """
 
+
 # wheres for the _json_points query (temp & out-of-range)
 _TEMPERATURE_JSON = _json_points("experiment_id = %(exp)s AND ts BETWEEN %(start)s AND %(end)s")
 _OUT_OF_RANGE_JSON = {
@@ -113,8 +118,10 @@ _OUT_OF_RANGE_JSON = {
     for has_end in (False, True)
 }
 
-async def temperatures_in_range(pool, experiment_id: str, start: float, end: float,
-                          limit: Optional[int], offset: int) -> str:
+
+async def temperatures_in_range(
+        pool, experiment_id: str, start: float, end: float,
+        limit: Optional[int], offset: int) -> str:
     """
     get json of the temperatures in range written by the consumer
     start <= ts <= end with oldest first
@@ -122,23 +129,39 @@ async def temperatures_in_range(pool, experiment_id: str, start: float, end: flo
     return json str of temperatures within specified range
     """
     async with pool.connection() as conn:
-        current = await conn.execute(_TEMPERATURE_JSON, {"exp": experiment_id, "start": start, "end": end, "limit": limit, "offset": offset})
+        current = await conn.execute(
+            _TEMPERATURE_JSON, {"exp": experiment_id, "start": start, "end": end, "limit": limit, "offset": offset}
+        )
         return (await current.fetchone())["body"]
 
-async def out_of_range_temperatures(pool, experiment_id: str, start: Optional[float],
-                              end: Optional[float], limit: Optional[int], offset: int) -> str:
+
+async def out_of_range_temperatures(
+        pool, experiment_id: str, start: Optional[float],
+        end: Optional[float], limit: Optional[int], offset: int) -> str:
     """
     get json of out-of-range temperatures written by the consumer
     just read flag from consumer with oldest first
     return json str of out-of-range temperatures within specified range
     """
     sql = _OUT_OF_RANGE_JSON[(start is not None, end is not None)]
+    t0 = time.perf_counter()
     async with pool.connection() as conn:
-        current = await conn.execute(sql, {"exp": experiment_id, "start": start, "end": end, "limit": limit, "offset": offset})
-        return (await current.fetchone())["body"]
+        # got a connection
+        t1 = time.perf_counter()
+        current = await conn.execute(
+            sql, {"exp": experiment_id, "start": start, "end": end, "limit": limit, "offset": offset}
+        )
+        body = (await current.fetchone())["body"]
+        # query done
+        t2 = time.perf_counter()
+    timing.record("pool_wait", (t1 - t0) * 1000)
+    timing.record("query", (t2 - t1) * 1000)
+    return body
 
-async def temperature_series(pool, experiment_id: str, start: float, end: float,
-                       interval: float) -> list[dict]:
+
+async def temperature_series(
+        pool, experiment_id: str, start: float, end: float,
+        interval: float) -> list[dict]:
     """
     get temperature series for an experiment, grouped into fixed-width time buckets (for charts)
     buckets are aligned to multiple intervals, so they have same start between req
@@ -164,10 +187,11 @@ async def temperature_series(pool, experiment_id: str, start: float, end: float,
 
         return await current.fetchall()
 
-# ---------------------------------------------------------------- experiments
 
+# experiments
 _EXPERIMENT_COLUMNS = """experiment_id, researcher, sensors,
                          lower_threshold, upper_threshold, phase"""
+
 
 async def experiment_known(pool, experiment_id: str) -> bool:
     """
@@ -188,6 +212,7 @@ async def experiment_known(pool, experiment_id: str) -> bool:
 
     return row["known"]
 
+
 async def get_experiment(pool, experiment_id: str) -> Optional[dict]:
     """
     get details from a specific experiment
@@ -200,14 +225,15 @@ async def get_experiment(pool, experiment_id: str) -> Optional[dict]:
             (experiment_id,),
         )
         row = await current.fetchone()
-    
+
     if row is not None:
         return row
-    
+
     if await experiment_known(pool, experiment_id):
         return {"experiment_id": experiment_id, "researcher": None, "sensors": None,
                 "lower_threshold": None, "upper_threshold": None, "phase": None}
     return None
+
 
 async def list_experiments(pool, phase: Optional[str], limit: Optional[int], offset: int) -> list[dict]:
     """
@@ -237,8 +263,10 @@ async def list_experiments(pool, phase: Optional[str], limit: Optional[int], off
 
         return await current.fetchall()
 
-async def experiment_stats(pool, experiment_id: str, start: Optional[float],
-                            end: Optional[float]) -> dict:
+
+async def experiment_stats(
+        pool, experiment_id: str, start: Optional[float],
+        end: Optional[float]) -> dict:
     """
     gets summary of temperature statistics for an experiment
     return dict with experiment temperature stats

@@ -25,7 +25,6 @@ import math
 import os
 import time
 import uuid
-import anyio
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -40,7 +39,8 @@ from psycopg.errors import QueryCanceled
 from psycopg_pool import PoolTimeout
 from pydantic import BaseModel, Field
 
-from . import db
+from . import db, timing
+
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -49,13 +49,14 @@ log = logging.getLogger("api")
 MAX_BUCKETS = 10_000      # buckets in 1 /temperature/series response
 MAX_LIMIT = 1_000_000     # largest page size
 MAX_OFFSET = 2_147_483_647
-THREADS = int(os.getenv("THREADS", "40"))        # worker threads per process (default is 40)
 SLOW_MS = float(os.getenv("SLOW_MS", "200"))     # log req slower than this
 
-# ---------------------------------------------------------------- response models
+
+# response models
 class Measurement(BaseModel):
     timestamp: float = Field(description="Unix epoch seconds")
     temperature: float = Field(description="Average over the experiment's sensors")
+
 
 class SeriesBucket(BaseModel):
     bucket_start: float
@@ -65,6 +66,7 @@ class SeriesBucket(BaseModel):
     max_temperature: float
     out_of_range_count: int
 
+
 class Experiment(BaseModel):
     experiment_id: str
     researcher: Optional[str] = None
@@ -73,6 +75,8 @@ class Experiment(BaseModel):
     upper_threshold: Optional[float] = None
     phase: Optional[str] = Field(None, description="configured | stabilization | running | terminated; "
                                                    "null if the consumer did not store details")
+
+
 class ExperimentStats(BaseModel):
     experiment_id: str
     count: int
@@ -84,16 +88,16 @@ class ExperimentStats(BaseModel):
     out_of_range_count: int
     out_of_range_ratio: float
 
+
 class Health(BaseModel):
     status: str
 
-# ---------------------------------------------------------------- app & lifecycle
 
+# app & lifecycle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # sync endpoints run in a thread pool
     # default = 40 threads
-    anyio.to_thread.current_default_thread_limiter().total_tokens = THREADS
     app.state.pool = await db.create_pool()
     log.info("connected to the database")
     try:
@@ -101,13 +105,15 @@ async def lifespan(app: FastAPI):
     finally:
         await app.state.pool.close()
 
+
 app = FastAPI(title="Temperature Observability API", version="1.0.0",
               description="Query temperatures stored by the observability consumer.",
               lifespan=lifespan)
 
+
 class RequestContext:
     """
-    custom middleware that tracks requests and monitors performance => replace @app.middleware("http")
+    Custom middleware that tracks requests and monitors performance => replace @app.middleware("http")
     attach request id (from echoed X-Request-ID)
     log slow/failed requests
     """
@@ -122,7 +128,7 @@ class RequestContext:
 
         rid = next((v.decode("latin-1") for k, v in scope["headers"] if k == b"x-request-id"),
                    None) or uuid.uuid4().hex
-        
+
         scope.setdefault("state", {})["request_id"] = rid   # read by request.state.request_id
         start, status = time.perf_counter(), 500
 
@@ -138,26 +144,38 @@ class RequestContext:
             await self.app(scope, receive, send_wrapper)
         finally:
             ms = (time.perf_counter() - start) * 1000
+            if scope["path"].startswith("/temperature"):
+                timing.record("app_total", ms)
             if status >= 500 or ms > SLOW_MS:
                 log.warning("request_id=%s %s %s -> %s (%.1f ms)", rid, scope["method"],
                             scope["path"], status, ms)
 
+
 app.add_middleware(RequestContext)
+
 
 def _error(request: Request, status: int, detail: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"detail": detail},
                         headers={"X-Request-ID": getattr(request.state, "request_id", "")})
+
 
 @app.exception_handler(QueryCanceled)
 async def query_too_slow(request: Request, exc: QueryCanceled):
     log.warning("query cancelled by statement_timeout: %s", exc)
     return _error(request, 503, "query took too long, try a smaller time window")
 
+
 @app.exception_handler(OperationalError)
-@app.exception_handler(PoolTimeout)
 async def database_unavailable(request: Request, exc: Exception):
     log.error("database unavailable: %s", exc)
     return _error(request, 503, "database unavailable")
+
+
+@app.exception_handler(PoolTimeout)
+async def pool_busy(request: Request, exc: PoolTimeout):
+    log.warning("no free database connections available: %s", exc)
+    return _error(request, 503, "server busy, try again")
+
 
 @app.exception_handler(psycopg.Error)
 async def database_error(request: Request, exc: psycopg.Error):
@@ -165,8 +183,8 @@ async def database_error(request: Request, exc: psycopg.Error):
     log.exception("database error: %s", exc)
     return _error(request, 500, "internal database error")
 
-# ---------------------------------------------------------------- input helpers
 
+# input helpers
 def parse_time(value: Optional[str], name: str) -> Optional[float]:
     """
     parse time from epoch seconds/ISO-8601 to --> epoch seconds
@@ -202,14 +220,15 @@ def check_id(experiment_id: str) -> str:
         raise HTTPException(422, "experiment-id must not contain NUL characters")
     return experiment_id
 
+
 EXPERIMENT_ID = Query(..., alias="experiment-id", min_length=1, description="Experiment to query")
 # no limit by default: endpoints return the whole list
 # (load generator compares the whole response)
 LIMIT = Query(None, ge=1, le=MAX_LIMIT, description="Optional maximum number of rows (default: all)")
 OFFSET = Query(0, ge=0, le=MAX_OFFSET, description="Rows to skip, for paging")
 
-# ---------------------------------------------------------------- endpoints
 
+# endpoints
 @app.get("/temperature", response_model=list[Measurement], tags=["temperature"],
          summary="Temperatures in a time window")
 async def get_temperature(
@@ -221,15 +240,16 @@ async def get_temperature(
     offset: int = OFFSET,
 ):
     """
-    get averaged temperatures of 1 experiment 
+    get averaged temperatures of 1 experiment
         - start-time <= ts <= end-time, oldest first
     unknown experiment/window without readings returns []
     """
     start, end = parse_time(start_time, "start-time"), parse_time(end_time, "end-time")
     check_window(start, end)
     body = await db.temperatures_in_range(request.app.state.pool, check_id(experiment_id),
-                                    start, end, limit, offset)
+                                          start, end, limit, offset)
     return Response(content=body, media_type="application/json")   # JSON built by Postgres
+
 
 @app.get("/temperature/out-of-range", response_model=list[Measurement], tags=["temperature"],
          summary="Temperatures outside the experiment's thresholds")
@@ -248,7 +268,7 @@ async def get_out_of_range(
     start, end = parse_time(start_time, "start-time"), parse_time(end_time, "end-time")
     check_window(start, end)
     body = await db.out_of_range_temperatures(request.app.state.pool, check_id(experiment_id),
-                                        start, end, limit, offset)
+                                              start, end, limit, offset)
     return Response(content=body, media_type="application/json")   # JSON built by Postgres
 
 
