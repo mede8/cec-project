@@ -39,7 +39,7 @@ from psycopg.errors import QueryCanceled
 from psycopg_pool import PoolTimeout
 from pydantic import BaseModel, Field
 
-from . import db, timing
+from . import db, timing, cache
 
 
 logging.basicConfig(level=logging.INFO,
@@ -256,8 +256,16 @@ async def get_temperature(
     """
     start, end = parse_time(start_time, "start-time"), parse_time(end_time, "end-time")
     check_window(start, end)
-    body = await db.temperatures_in_range(request.app.state.pool, check_id(experiment_id),
-                                          start, end, limit, offset)
+    experiment_id = check_id(experiment_id)
+    pool = request.app.state.pool
+
+    async def load():
+        return await db.temperatures_in_range(pool, experiment_id, start, end, limit, offset)
+
+    # this needs to be checked, otherwise set TTL_S to 0.25
+    if end < time.time() - 2:
+        body, hit = await cache.get_or_load(("temp", experiment_id, start, end, limit, offset), load)
+    timing.record("cache_hit" if hit else "cache_miss", 0)
     return Response(content=body, media_type="application/json")   # JSON built by Postgres
 
 
@@ -277,8 +285,14 @@ async def get_out_of_range(
     """
     start, end = parse_time(start_time, "start-time"), parse_time(end_time, "end-time")
     check_window(start, end)
-    body = await db.out_of_range_temperatures(request.app.state.pool, check_id(experiment_id),
-                                              start, end, limit, offset)
+    experiment_id = check_id(experiment_id)
+    pool = request.app.state.pool
+
+    async def load():
+        return await db.out_of_range_temperatures(pool, experiment_id, start, end, limit, offset)
+
+    body, hit = await cache.get_or_load(("oor", experiment_id, start, end, limit, offset), load)
+    timing.record("cache_hit" if hit else "cache_miss", 0)
     return Response(content=body, media_type="application/json")   # JSON built by Postgres
 
 
