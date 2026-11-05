@@ -1,27 +1,28 @@
-"""Read-only database access for the REST API.
+"""
+read-only db access for rest api
+api only reads from 2 tables:
+  - temperatures: 1 row per avg measurement, with the out_of_range flag
+                the consumer showed from experiments
+  - experiments: experiment details (thresholds, phase), api
+                works even if consumer never fills the table
 
-The consumer writes the tables in db/init.sql; the API only reads them:
-
-  temperatures  one row per averaged measurement, saved by the consumer
-                while an experiment is running, with the out_of_range flag
-                the consumer computed from the experiment's thresholds
-  experiments   experiment details (thresholds, phase). Optional: the API
-                works even if the consumer never fills this table.
-
-Every query is parameterised (%s), so user input never becomes SQL text.
-All SQL lives in this file: if a table or column is renamed, only this file
-needs to change.
+queries are parameterised (%s) => prevent sql injection
 """
 
 import os
 from typing import Optional
 
 from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
+from psycopg_pool import AsyncConnectionPool
 
 
 def database_url() -> str:
-    """DATABASE_URL (as set in docker-compose.yml), else the POSTGRES_* parts."""
+    """
+    gets database url
+        - DATABASE_URL: from .env
+        - build it from postgres
+    return str with db url
+    """
     url = os.getenv("DATABASE_URL")
     if url:
         return url
@@ -34,48 +35,57 @@ def database_url() -> str:
     )
 
 
-def _configure(conn) -> None:
-    # The API never writes. Making every session read-only means even a bug
-    # in the API cannot change the consumer's data.
-    conn.execute("SET default_transaction_read_only = on")
+async def _configure(conn) -> None:
+    """
+    configure api connection to have read-only access
+        - read-only: because consumer just writes & api reads
+    """
+    await conn.execute("SET default_transaction_read_only = on")
 
 
-def create_pool() -> ConnectionPool:
+async def create_pool() -> AsyncConnectionPool:
+    """
+    create and open pool but async
+    called once per worker process at startup
+    return the async connection pool for the worker process
+    """
     size = int(os.getenv("API_POOL_SIZE", "8"))
-    pool = ConnectionPool(
+    pool = AsyncConnectionPool(
         conninfo=database_url(),
         min_size=size,
         max_size=size,
-        # A request waits at most this long for a connection, then gets 503.
+        # req waits this to connect, if not 503 err
         timeout=float(os.getenv("DB_REQUEST_TIMEOUT", "5")),
         kwargs={
             "row_factory": dict_row,
             "autocommit": True,
-            # Postgres cancels any single query that runs longer than this.
+            # cancel query if too long to run
             "options": f"-c statement_timeout={int(os.getenv('DB_STATEMENT_TIMEOUT_MS', '5000'))}",
         },
         configure=_configure,
-        open=True,
+        open=False,
     )
-    # Fail fast at startup if the database is unreachable; compose restarts us.
-    pool.wait(timeout=float(os.getenv("DB_CONNECT_TIMEOUT", "30")))
+    await pool.open() # open pool
+    # if db is unreachable fail at startup, docker compose restart
+    await pool.wait(timeout=float(os.getenv("DB_CONNECT_TIMEOUT", "30")))
+
     return pool
 
 
-def ping(pool: ConnectionPool) -> None:
-    with pool.connection() as conn:
+async def ping(pool: AsyncConnectionPool) -> None:
+    """
+    ping db asynchronously to check if it is reachable
+    """
+    async with pool.connection() as conn:
         conn.execute("SELECT 1")
 
 
 # ---------------------------------------------------------------- temperatures
 
-# The two required endpoints can return thousands of rows and are queried
-# 1000 times per second by the course's load generator. Postgres builds
-# the JSON array itself (json_agg), so Python only passes the text through.
-# float8 values are written in their shortest exact form, so timestamps
-# round-trip bit-for-bit, which is what the grader compares.
-
 def _json_points(where: str) -> str:
+    """
+    query to return JSON of readings from a specific where from temperatures table
+    """
     return f"""
         SELECT coalesce(json_agg(page), '[]')::text AS body
         FROM (
@@ -87,7 +97,7 @@ def _json_points(where: str) -> str:
         ) AS page
     """
 
-
+# wheres for the _json_points query (temp & out-of-range)
 _TEMPERATURE_JSON = _json_points("experiment_id = %(exp)s AND ts BETWEEN %(start)s AND %(end)s")
 _OUT_OF_RANGE_JSON = {
     (has_start, has_end): _json_points(
@@ -101,40 +111,40 @@ _OUT_OF_RANGE_JSON = {
     for has_end in (False, True)
 }
 
-
-def temperatures_in_range(pool, experiment_id: str, start: float, end: float,
+async def temperatures_in_range(pool, experiment_id: str, start: float, end: float,
                           limit: Optional[int], offset: int) -> str:
-    """JSON array of readings with start <= ts <= end, oldest first.
-    limit=None returns every row (LIMIT NULL means no limit in Postgres)."""
-    with pool.connection() as conn:
-        return conn.execute(_TEMPERATURE_JSON, {"exp": experiment_id, "start": start, "end": end,
-                                                "limit": limit, "offset": offset}).fetchone()["body"]
+    """
+    get json of the temperatures in range written by the consumer
+    start <= ts <= end with oldest first
+    if no limit then return all rows
+    return json str of temperatures within specified range
+    """
+    async with pool.connection() as conn:
+        current = await conn.execute(_TEMPERATURE_JSON, {"exp": experiment_id, "start": start, "end": end, "limit": limit, "offset": offset})
+        return (await current.fetchone())["body"]
 
-
-def out_of_range_temperatures(pool, experiment_id: str, start: Optional[float],
+async def out_of_range_temperatures(pool, experiment_id: str, start: Optional[float],
                               end: Optional[float], limit: Optional[int], offset: int) -> str:
-    """JSON array of the readings the consumer flagged as out of range, oldest first.
-
-    The consumer sets out_of_range when it saves a reading, using the
-    experiment's thresholds (a value exactly on a threshold is in range).
-    The API trusts that flag instead of recomputing it, so the API and the
-    notifications the consumer sends always agree.
+    """
+    get json of out-of-range temperatures written by the consumer
+    just read flag from consumer with oldest first
+    return json str of out-of-range temperatures within specified range
     """
     sql = _OUT_OF_RANGE_JSON[(start is not None, end is not None)]
-    with pool.connection() as conn:
-        return conn.execute(sql, {"exp": experiment_id, "start": start, "end": end,
-                                                 "limit": limit, "offset": offset}).fetchone()["body"]
+    async with pool.connection() as conn:
+        current = await conn.execute(sql, {"exp": experiment_id, "start": start, "end": end, "limit": limit, "offset": offset})
+        return (await current.fetchone())["body"]
 
-
-def temperature_series(pool, experiment_id: str, start: float, end: float,
+async def temperature_series(pool, experiment_id: str, start: float, end: float,
                        interval: float) -> list[dict]:
-    """Readings grouped into fixed-width time buckets (for charts).
-
-    Buckets are aligned to multiples of `interval`, so a bucket always has
-    the same start time across requests. Empty buckets are left out.
     """
-    with pool.connection() as conn:
-        return conn.execute(
+    get temperature series for an experiment, grouped into fixed-width time buckets (for charts)
+    buckets are aligned to multiple intervals, so they have same start between req
+    ignor empty buckets
+    return list of dict with temperature series in grouped buckets
+    """
+    async with pool.connection() as conn:
+        current = await conn.execute(
             """
             SELECT floor(ts / %(iv)s) * %(iv)s     AS bucket_start,
                    count(*)                         AS count,
@@ -148,51 +158,64 @@ def temperature_series(pool, experiment_id: str, start: float, end: float,
             ORDER BY bucket_start
             """,
             {"exp": experiment_id, "start": start, "end": end, "iv": interval},
-        ).fetchall()
+        )
 
+        return await current.fetchall()
 
 # ---------------------------------------------------------------- experiments
 
 _EXPERIMENT_COLUMNS = """experiment_id, researcher, sensors,
                          lower_threshold, upper_threshold, phase"""
 
-
-def experiment_known(pool, experiment_id: str) -> bool:
-    """True if the experiment is in either table."""
-    with pool.connection() as conn:
-        row = conn.execute(
+async def experiment_known(pool, experiment_id: str) -> bool:
+    """
+    check if the experiment is in experiments/temperatures tables
+    return true if experiment exists
+    """
+    async with pool.connection() as conn:
+        current = await conn.execute(
             """
             SELECT EXISTS (SELECT 1 FROM experiments  WHERE experiment_id = %(e)s)
                 OR EXISTS (SELECT 1 FROM temperatures WHERE experiment_id = %(e)s)
                 AS known
             """,
             {"e": experiment_id},
-        ).fetchone()
+        )
+
+        row = await current.fetchone()
+
     return row["known"]
 
-
-def get_experiment(pool, experiment_id: str) -> Optional[dict]:
-    """Details from the experiments table, or a minimal record if the
-    experiment only appears in temperatures."""
-    with pool.connection() as conn:
-        row = conn.execute(
+async def get_experiment(pool, experiment_id: str) -> Optional[dict]:
+    """
+    get details from a specific experiment
+    check in experiments table and if not check in temperatures for minimal records
+    return dict with experiment or None if not found
+    """
+    async with pool.connection() as conn:
+        current = await conn.execute(
             f"SELECT {_EXPERIMENT_COLUMNS} FROM experiments WHERE experiment_id = %s",
             (experiment_id,),
-        ).fetchone()
+        )
+        row = await current.fetchone()
+    
     if row is not None:
         return row
+    
     if experiment_known(pool, experiment_id):
         return {"experiment_id": experiment_id, "researcher": None, "sensors": None,
                 "lower_threshold": None, "upper_threshold": None, "phase": None}
     return None
 
-
-def list_experiments(pool, phase: Optional[str], limit: Optional[int], offset: int) -> list[dict]:
-    """Experiments from the experiments table, plus any experiment that only
-    has rows in temperatures (the consumer may not fill the experiments
-    table). Filtering by phase only returns experiments with known details."""
-    with pool.connection() as conn:
-        return conn.execute(
+async def list_experiments(pool, phase: Optional[str], limit: Optional[int], offset: int) -> list[dict]:
+    """
+    get list of experiments
+    find from experiments table & temperatures
+    filters by phase returns experiments that are known
+    return list of dict with experiments
+    """
+    async with pool.connection() as conn:
+        current = await conn.execute(
             f"""
             SELECT * FROM (
                 SELECT {_EXPERIMENT_COLUMNS} FROM experiments
@@ -208,14 +231,18 @@ def list_experiments(pool, phase: Optional[str], limit: Optional[int], offset: i
             LIMIT %(limit)s OFFSET %(offset)s
             """,
             {"phase": phase, "limit": limit, "offset": offset},
-        ).fetchall()
+        )
 
+        return await current.fetchall()
 
-def experiment_stats(pool, experiment_id: str, start: Optional[float],
-                     end: Optional[float]) -> dict:
-    """Summary of an experiment's saved readings in one pass."""
-    with pool.connection() as conn:
-        row = conn.execute(
+async def experiment_stats(pool, experiment_id: str, start: Optional[float],
+                            end: Optional[float]) -> dict:
+    """
+    gets summary of temperature statistics for an experiment
+    return dict with experiment temperature stats
+    """
+    async with pool.connection() as conn:
+        current = await conn.execute(
             """
             SELECT count(*)                            AS count,
                    min(temperature)                    AS min_temperature,
@@ -230,7 +257,10 @@ def experiment_stats(pool, experiment_id: str, start: Optional[float],
               AND (%(end)s::float8   IS NULL OR ts <= %(end)s)
             """,
             {"exp": experiment_id, "start": start, "end": end},
-        ).fetchone()
+        )
+        row = await current.fetchone()
+
     row["experiment_id"] = experiment_id
     row["out_of_range_ratio"] = (row["out_of_range_count"] / row["count"]) if row["count"] else 0.0
+
     return row
