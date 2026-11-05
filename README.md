@@ -2,11 +2,12 @@
 
 ### Authors: Andrei, Diana, Dami
 
-Repository Structure (tbd)
+### Repository Structure (current form)
 
 ```bash
 temperature-observability-service/
 ├── docker-compose.yml
+│
 ├── consumer/
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -20,9 +21,22 @@ temperature-observability-service/
 │   ├── requirements.txt
 │   └── app/
 │       ├── main.py          # FastAPI app, defines endpoints
-│       └── db.py            # reads: out-of-range query, time-range query
-└── db/
-    └── init.sql             # creates tables on first startup
+│       ├── db.py            # reads: out-of-range query, time-range query
+│       ├── timing.py
+│       └── cache.py  
+├── db/
+│    └── init.sql             # creates tables on first startup
+│
+├── stress-test/            
+│   ├── api_load.js     # http load generator using k6
+│   ├── k6_stages.py    # k6 stages to monitor api's results
+│   ├── analyse.py      # summary of 1 run done by monitor
+│   └── monitor.sh      # monitor CPU/memory when running stress test 
+│
+└── producer/
+    ├── config_generator.py
+    ├── experiment.sh
+    └── notifications.sh
 ```
 
 ### Improvements for Final Stage
