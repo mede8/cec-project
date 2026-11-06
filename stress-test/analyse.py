@@ -3,10 +3,11 @@
 usage: python3 stress-test/analyse.py stress-test/results/<run-name> [window_s]
 
 Reads stats.csv (container CPU/memory), vmstat.txt (host CPU), consumer.log
-(lag and notification lines), api.log and run_info.txt. Prints an overall
-summary, then a table per time window (default 30 s, clock time in UTC) so it
-can be lined up with the k6_stages.py table of the same run.
+(lag and notification lines), api.log and run_info.txt. Prints an overall summary,
+then a table per time window (default 30 s).
 Writes the same text to <run-folder>/summary.txt.
+
+Parts of this script were created with AI assistance (Copilot).
 """
 import csv
 import re

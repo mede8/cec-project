@@ -1,7 +1,8 @@
 #!/bin/bash
 # records container CPU/memory usage during stress-testing
 # results go to stress-test/results/<run name>
-# start it in a tmux session, after docker compose up -d --build
+# can be started in a tmux session, after docker compose up -d --build
+# Parts of this script were created with AI assistance (Copilot).
 
 cd "$(dirname "$0")/.." || exit 1
 
@@ -19,13 +20,10 @@ echo "$start" > "$out/start_time"
 # what was tested in this run
 {
     echo "start (UTC): $start"
-    echo "git: $(git rev-parse --abbrev-ref HEAD) $(git rev-parse --short HEAD), $(git status --porcelain | wc -l) uncommitted file(s)"
     echo "host: $(uname -m), $(nproc) cores, $(free -m | awk '/^Mem:/{print $2}') MB RAM"
     tok=$(curl -s -m 1 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
     echo "instance: $(curl -s -m 1 -H "X-aws-ec2-metadata-token: $tok" http://169.254.169.254/latest/meta-data/instance-type || echo unknown)"
-    echo "settings in .env (secrets are not copied):"
-    grep -E '^(TOPIC|GROUP_ID|OFFSET_RESET|NOTIFY_URL|NOTIFY_WORKERS|API_WORKERS|API_POOL_SIZE|FETCH_WAIT_MAX_MS|SLOW_REQUEST_MS)=' .env | sed 's/^/  /'
-    echo "api container: WEB_CONCURRENCY (uvicorn workers)=$(docker compose exec -T api printenv WEB_CONCURRENCY) DB_POOL_SIZE=$(docker compose exec -T api printenv DB_POOL_SIZE)"
+    echo "api container: WEB_CONCURRENCY (uvicorn workers)=$(docker compose exec -T api printenv WEB_CONCURRENCY) API_POOL_SIZE=$(docker compose exec -T api printenv API_POOL_SIZE)"
     echo "containers:"
     docker ps --format '  {{.Names}}  {{.Image}}  {{.Status}}'
 } > "$out/run_info.txt"

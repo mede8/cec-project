@@ -1,4 +1,5 @@
 #!/bin/bash
+# for running the experiment-producer container
 set -e
 cd "$(dirname "$0")"
 source ./producer.env

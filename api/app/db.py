@@ -1,10 +1,10 @@
-"""
-read-only db access for rest api
-api only reads from 2 tables:
-  - temperatures: 1 row per avg measurement, with the out_of_range flag
-                the consumer showed from experiments
-  - experiments: experiment details (thresholds, phase), api
-                works even if consumer never fills the table
+"""Read-only db access for rest API
+
+the API only reads from 2 tables:
+- temperatures: 1 row per avg measurement, with the out_of_range flag
+                the consumer showed from experiments.
+- experiments: experiment details (thresholds, phase), api
+               works even if consumer never fills the table.
 
 queries are parameterised (%s) => prevent sql injection
 """
@@ -12,7 +12,6 @@ import os
 import time
 import logging
 from typing import Optional
-
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
@@ -23,11 +22,9 @@ log = logging.getLogger("api.db")
 
 
 def database_url() -> str:
-    """
-    gets database url
-        - DATABASE_URL: from .env
-        - build it from postgres
-    return str with db url
+    """Gets database URl from .env or builds it from postgres.
+
+    :returns: str with db url
     """
     url = os.getenv("DATABASE_URL")
     if url:
@@ -42,25 +39,21 @@ def database_url() -> str:
 
 
 async def _configure(conn) -> None:
-    """
-    configure api connection to have read-only access
-        - read-only: because consumer just writes & api reads
-    """
+    """Configure api connection to have read-only access."""
     await conn.execute("SET default_transaction_read_only = on")
 
 
 async def create_pool() -> AsyncConnectionPool:
-    """
-    create and open pool but async
-    called once per worker process at startup
-    return the async connection pool for the worker process
+    """Create and open pool but asynchronous. Called once per worker process at startup.
+
+    :returns: the async connection pool for the worker process.
     """
     size = int(os.getenv("API_POOL_SIZE", "8"))
     pool = AsyncConnectionPool(
         conninfo=database_url(),
         min_size=size,
         max_size=size,
-        # req waits this to connect, if not 503 err
+        # req waits this to connect, if not 503 error
         timeout=float(os.getenv("DB_REQUEST_TIMEOUT", "5")),
         kwargs={
             "row_factory": dict_row,
@@ -73,24 +66,24 @@ async def create_pool() -> AsyncConnectionPool:
     )
     # open pool
     await pool.open()
-    # if db is unreachable fail at startup, docker compose restart
+    # if db is unreachable, fail at startup, docker compose restart
     await pool.wait(timeout=float(os.getenv("DB_CONNECT_TIMEOUT", "30")))
 
     return pool
 
 
 async def ping(pool: AsyncConnectionPool) -> None:
-    """
-    ping db asynchronously to check if it is reachable
-    """
+    """Ping db asynchronously to check if it is reachable."""
     async with pool.connection() as conn:
         await conn.execute("SELECT 1")
 
 
 # temperatures
 def _json_points(where: str) -> str:
-    """
-    query to return JSON of readings from a specific where from temperatures table
+    """Query to return JSON of readings from a specific where from temperatures table.
+
+    :param where: strings that determines the position in JSON.
+    :returns: the string containing the information requested.
     """
     return f"""
         SELECT coalesce(json_agg(page), '[]')::text AS body
@@ -122,11 +115,18 @@ _OUT_OF_RANGE_JSON = {
 async def temperatures_in_range(
         pool, experiment_id: str, start: float, end: float,
         limit: Optional[int], offset: int) -> str:
-    """
-    get json of the temperatures in range written by the consumer
+    """Get json of the temperatures in range written by the consumer
+
     start <= ts <= end with oldest first
-    if no limit then return all rows
-    return json str of temperatures within specified range
+
+    :param pool: the thread pool.
+    :param experiment_id: ID of experiment.
+    :param start: the requested start of the experiment.
+    :param end: the requested end time.
+    :param limit:
+    :param offset:
+    :returns: if no limit then return all rows, otherwise json str of temperatures
+              within specified range
     """
     async with pool.connection() as conn:
         current = await conn.execute(
@@ -138,10 +138,10 @@ async def temperatures_in_range(
 async def out_of_range_temperatures(
         pool, experiment_id: str, start: Optional[float],
         end: Optional[float], limit: Optional[int], offset: int) -> str:
-    """
-    get json of out-of-range temperatures written by the consumer
+    """Get json of out-of-range temperatures written by the consumer
     just read flag from consumer with oldest first
-    return json str of out-of-range temperatures within specified range
+
+    :returns: json str of out-of-range temperatures within specified range
     """
     sql = _OUT_OF_RANGE_JSON[(start is not None, end is not None)]
     t0 = time.perf_counter()
@@ -162,11 +162,11 @@ async def out_of_range_temperatures(
 async def temperature_series(
         pool, experiment_id: str, start: float, end: float,
         interval: float) -> list[dict]:
-    """
-    get temperature series for an experiment, grouped into fixed-width time buckets (for charts)
+    """Get temperature series for an experiment, grouped into fixed-width time buckets (for charts)
     buckets are aligned to multiple intervals, so they have same start between req
     ignor empty buckets
-    return list of dict with temperature series in grouped buckets
+
+    :returns: list of dict with temperature series in grouped buckets
     """
     async with pool.connection() as conn:
         current = await conn.execute(
@@ -189,14 +189,13 @@ async def temperature_series(
 
 
 # experiments
-_EXPERIMENT_COLUMNS = """experiment_id, researcher, sensors,
-                         lower_threshold, upper_threshold, phase"""
+_EXPERIMENT_COLUMNS = """experiment_id, researcher, sensors, lower_threshold, upper_threshold, phase"""
 
 
 async def experiment_known(pool, experiment_id: str) -> bool:
-    """
-    check if the experiment is in experiments/temperatures tables
-    return true if experiment exists
+    """Check if the experiment is in experiments/temperatures tables
+
+    :returns: true if experiment exists
     """
     async with pool.connection() as conn:
         current = await conn.execute(
@@ -214,10 +213,10 @@ async def experiment_known(pool, experiment_id: str) -> bool:
 
 
 async def get_experiment(pool, experiment_id: str) -> Optional[dict]:
-    """
-    get details from a specific experiment
+    """Get details from a specific experiment
     check in experiments table and if not check in temperatures for minimal records
-    return dict with experiment or None if not found
+
+    :returns: dict with experiment or None if not found
     """
     async with pool.connection() as conn:
         current = await conn.execute(
@@ -236,11 +235,9 @@ async def get_experiment(pool, experiment_id: str) -> Optional[dict]:
 
 
 async def list_experiments(pool, phase: Optional[str], limit: Optional[int], offset: int) -> list[dict]:
-    """
-    get list of experiments
-    find from experiments table & temperatures
-    filters by phase returns experiments that are known
-    return list of dict with experiments
+    """Get list of experiments and find from experiments table & temperatures filters by phase.
+
+    :returns: list of dict with experiments
     """
     async with pool.connection() as conn:
         current = await conn.execute(
@@ -267,9 +264,9 @@ async def list_experiments(pool, phase: Optional[str], limit: Optional[int], off
 async def experiment_stats(
         pool, experiment_id: str, start: Optional[float],
         end: Optional[float]) -> dict:
-    """
-    gets summary of temperature statistics for an experiment
-    return dict with experiment temperature stats
+    """Gets summary of temperature statistics for an experiment
+
+    :returns: dict with experiment temperature stats
     """
     async with pool.connection() as conn:
         current = await conn.execute(

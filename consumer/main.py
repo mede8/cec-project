@@ -1,5 +1,4 @@
-# consumer loop + thread pool + state
-# import click idk  yet if we need it or not, if yes add to requirements.txt
+"""Consumer script for reading and decoding Kafka messages."""
 import io
 import logging
 import os
@@ -7,36 +6,25 @@ import signal
 import db
 import notifier
 import state
-import time  # for calculating lag
-
+import time
 from confluent_kafka import Consumer
 from fastavro import reader
 from concurrent.futures import ThreadPoolExecutor
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger("consumer")
 
 # env vars
-BROKERS = os.getenv("BROKERS", "kafka.cec.dlandau.nl:19092,kafka.cec.dlandau.nl:29092,kafka.cec.dlandau.nl:39092")
-TOPIC = os.getenv("TOPIC", "group12")  # check which is it xd
-GROUP_ID = os.getenv("GROUP_ID", "groupid12")  # check which is it xd
+BROKERS = os.getenv("BROKERS", "")
+TOPIC = os.getenv("TOPIC", "")
+GROUP_ID = os.getenv("GROUP_ID", "")
 OFFSET_RESET = os.getenv("OFFSET_RESET", "latest")
-SSL_CA_LOCATION = os.getenv("SSL_CA_LOCATION", "./auth/ca.crt")  # # check which is it xd
-SSL_KEYSTORE_LOCATION = os.getenv("SSL_KEYSTORE_LOCATION", "./auth/kafka.keystore.pkcs12")  # check which is it xd
-SSL_KEYSTORE_PASSWORD = os.getenv("SSL_KEYSTORE_PASSWORD", "cc2023")  # check which is it xd
+SSL_CA_LOCATION = os.getenv("SSL_CA_LOCATION", "")
+SSL_KEYSTORE_LOCATION = os.getenv("SSL_KEYSTORE_LOCATION", "")
+SSL_KEYSTORE_PASSWORD = os.getenv("SSL_KEYSTORE_PASSWORD", "")
 NOTIFY_WORKERS = int(os.getenv("NOTIFY_WORKERS", "8"))
 
-# c = Consumer({
-#     'bootstrap.servers': 'kafka.cec.dlandau.nl:19092,kafka.cec.dlandau.nl:29092,kafka.cec.dlandau.nl:39092',
-#     'group.id': f"{random.random()}", # check if this is random
-#     'auto.offset.reset': 'latest',
-#     'enable.auto.commit': 'true',
-#     'security.protocol': 'SSL',
-#     'ssl.ca.location': '../auth/ca.crt',
-#     'ssl.keystore.location': '../auth/kafka.keystore.pkcs12',
-#     'ssl.keystore.password': 'cc2023',
-#     'ssl.endpoint.identification.algorithm': 'none',
-# })
 
 running = True
 
@@ -47,6 +35,7 @@ def _stop(signum, frame):
 
 
 def create_consumer() -> Consumer:
+    """Create and return a Kafka consumer with the specified configuration."""
     c = Consumer({
         'bootstrap.servers': BROKERS,
         'group.id': GROUP_ID,
@@ -62,13 +51,28 @@ def create_consumer() -> Consumer:
     return c
 
 
-def get_record_name(msg) -> str:
+def get_record_name(msg: dict) -> str:
+    """Extract the record name from the Kafka message headers.
+    
+    :param msg: the Kafka message.
+    :return: the record name as a string.
+    """
     headers = dict(msg.headers() or [])
     raw_name = headers.get("record_name")
     return raw_name.decode('utf-8') if isinstance(raw_name, bytes) else raw_name
 
 
-def process_record(record_name: str, record: dict, conn, pool):
+def process_record(
+        record_name: str, record: dict, conn: db.Connection, pool: ThreadPoolExecutor
+) -> db.Connection:
+    """Process a single record, update the database and send notificaitons if needed.
+    
+    :param record_name: the name of the record.
+    :param record: the record data as a dictionary.
+    :param conn: the database connection.
+    :param pool: the thread pool executor for sending notifications.
+    :return: the updated database connection.
+    """
     event = state.handle_event(record_name, record)
 
     for action, payload in event:
@@ -81,10 +85,8 @@ def process_record(record_name: str, record: dict, conn, pool):
     return conn
 
 
-# @click.command()
-# @click.argument('topic')
-# def consume(topic: str):
 def consume():
+    """Poll the Kafka topic, decode Avro messages, and process them in a thread pool."""
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 

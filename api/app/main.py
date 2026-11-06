@@ -1,38 +1,27 @@
-"""
-temperature observability service api
-
-researchers ask for temperatures for different experiments
-consumer write info of experiments in db
+"""The API of the service
 
 required endpoints:
   GET /temperature?experiment-id=&start-time=&end-time=
   GET /temperature/out-of-range?experiment-id=
 
 extra endpoints:
-  GET /temperature/series      readings grouped into time buckets (charts)
-  GET /experiments             list experiments
-  GET /experiments/{id}        get 1 specificexperiment
-  GET /experiments/{id}/stats  stats of 1 experiment: count, min, max, average, out-of-range count
-  GET /health                  api & db reachable (503 if db down)
-  GET /health/live             api process is up (never touches db)
-
-times given as unix epoch seconds/ISO-8601
-responses => epoch seconds bc consumer writes them like that
+  GET /temperature/series -> readings grouped into time buckets (charts)
+  GET /experiments -> list experiments
+  GET /experiments/{id} -> get 1 specificexperiment
+  GET /experiments/{id}/stats -> stats of 1 experiment: count, min, max, average, out-of-range count
+  GET /health -> api & db reachable (503 if db down)
+  GET /health/live -> api process is up
 """
-
 import logging
 import math
 import os
 import time
 import uuid
-
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
-
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
-
 import psycopg
 from psycopg import OperationalError
 from psycopg.errors import QueryCanceled
@@ -42,14 +31,13 @@ from pydantic import BaseModel, Field
 from . import db, timing, cache
 
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
 
-MAX_BUCKETS = 10_000      # buckets in 1 /temperature/series response
-MAX_LIMIT = 1_000_000     # largest page size
+MAX_BUCKETS = 10_000  # buckets in 1 /temperature/series response
+MAX_LIMIT = 1_000_000  # largest page size
 MAX_OFFSET = 2_147_483_647
-SLOW_MS = float(os.getenv("SLOW_MS", "200"))     # log req slower than this
+SLOW_MS = float(os.getenv("SLOW_MS", "200"))  # log req slower than this
 MAX_IN_FLIGHT = int(os.getenv("MAX_IN_FLIGHT", "64"))
 in_flight = 0
 
@@ -75,8 +63,9 @@ class Experiment(BaseModel):
     sensors: Optional[list[str]] = None
     lower_threshold: Optional[float] = None
     upper_threshold: Optional[float] = None
-    phase: Optional[str] = Field(None, description="configured | stabilization | running | terminated; "
-                                                   "null if the consumer did not store details")
+    phase: Optional[str] = Field(
+        None, description="configured | stabilization | running | terminated; null otherwise"
+    )
 
 
 class ExperimentStats(BaseModel):
@@ -108,18 +97,17 @@ async def lifespan(app: FastAPI):
         await app.state.pool.close()
 
 
-app = FastAPI(title="Temperature Observability API", version="1.0.0",
-              description="Query temperatures stored by the observability consumer.",
-              lifespan=lifespan)
+app = FastAPI(
+    title="Temperature Observability API", version="1.0.0",
+    description="Query temperatures stored by the observability consumer.",
+    lifespan=lifespan
+)
 
 
 class RequestContext:
     """
-    Custom middleware that tracks requests and monitors performance => replace @app.middleware("http")
-    attach request id (from echoed X-Request-ID)
-    log slow/failed requests
+    Custom middleware that tracks requests and monitors performance.
     """
-
     def __init__(self, app):
         self.app = app
 

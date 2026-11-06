@@ -1,3 +1,4 @@
+"""API cache creation script."""
 import asyncio
 import os
 import time

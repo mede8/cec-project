@@ -1,8 +1,8 @@
 // k6 load test for the Temperature Observability REST API
-// -e VERIFY=1     30 s at 5 requests/s: does the script work?
-// default (step)  staircase 200 -> 400 -> 600 -> 800 -> 1000 requests/s, 1 min hold per step
-//                 (~10 min): shows at which rate the API breaks
-// -e MODE=hold    30 s ramp, then 1000 requests/s for 3 min: does it HOLD the target?
+// -e VERIFY=1 -> 30 s at 5 requests/s: does the script work?
+// default (step) 200 -> 400 -> 600 -> 800 -> 1000 requests/s, 1 min hold per step
+// -e MODE=hold -> 30 s ramp, then 1000 requests/s for 3 min: does it HOLD the target?
+// -e PING=1 -> 1000 requests/s for only /health/live
 // reference: https://blog.hobosuit.com/arkade-load-testing-with-k6/
 
 import http from 'k6/http';
@@ -17,8 +17,6 @@ const verify = {
     preAllocatedVUs: 5,
 };
 
-// Open model: k6 starts `target` requests per second whether or not earlier ones
-// have finished. If all VUs are busy waiting, k6 counts a dropped_iteration.
 const step = (rate) => [{ target: rate, duration: '30s' }, { target: rate, duration: '1m' }];
 
 const stress = {

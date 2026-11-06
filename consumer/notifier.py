@@ -1,3 +1,4 @@
+"""Sends notifications to the notifications-service"""
 import requests
 import os
 import time

@@ -1,3 +1,4 @@
+"""Creates a config.json file with a list of experiments for the producer to run."""
 import json
 import random
 import sys
