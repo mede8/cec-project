@@ -44,11 +44,13 @@ in_flight = 0
 
 # response models
 class Measurement(BaseModel):
+    """Averaged measurement (temperature) of an experiment."""
     timestamp: float = Field(description="Unix epoch seconds")
     temperature: float = Field(description="Average over the experiment's sensors")
 
 
 class SeriesBucket(BaseModel):
+    """Aggregated measurements of an experiment in a time bucket."""
     bucket_start: float
     count: int
     avg_temperature: float
@@ -58,6 +60,7 @@ class SeriesBucket(BaseModel):
 
 
 class Experiment(BaseModel):
+    """Experiment description with its configuration."""
     experiment_id: str
     researcher: Optional[str] = None
     sensors: Optional[list[str]] = None
@@ -69,6 +72,7 @@ class Experiment(BaseModel):
 
 
 class ExperimentStats(BaseModel):
+    """Summary statistics of an experiment."""
     experiment_id: str
     count: int
     min_temperature: Optional[float]
@@ -81,12 +85,17 @@ class ExperimentStats(BaseModel):
 
 
 class Health(BaseModel):
+    """Health check response."""
     status: str
 
 
 # app & lifecycle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Connects db pool on startup, closes on shutdown.
+    
+    :param app: FastAPI application
+    """
     # sync endpoints run in a thread pool
     # default = 40 threads
     app.state.pool = await db.create_pool()
@@ -109,9 +118,19 @@ class RequestContext:
     Custom middleware that tracks requests and monitors performance.
     """
     def __init__(self, app):
+        """Initializes the middleware with the FastAPI app.
+        
+        :param app: FastAPI application
+        """
         self.app = app
 
     async def __call__(self, scope, receive, send):
+        """Hangles one call.
+        
+        :param scope: connection scope
+        :param receive: async collable to receive
+        :param send: async callable to send
+        """
         global in_flight
         if scope["type"] != "http":
             await self.app(scope, receive, send)
@@ -130,6 +149,10 @@ class RequestContext:
         start, status = time.perf_counter(), 500
 
         async def send_wrapper(message):
+            """Captures the status code and adds the request ID header.
+            
+            :param message: the message to send
+            """
             nonlocal status
             if message["type"] == "http.response.start":
                 status = message["status"]
@@ -153,30 +176,61 @@ app.add_middleware(RequestContext)
 
 
 def _error(request: Request, status: int, detail: str) -> JSONResponse:
+    """JSON error response with request ID.
+    
+    :param request: request that failed
+    :param status: HTTP status to return
+    :param detail: error message
+    :return: JSON error response
+    """
     return JSONResponse(status_code=status, content={"detail": detail},
                         headers={"X-Request-ID": getattr(request.state, "request_id", "")})
 
 
 @app.exception_handler(QueryCanceled)
 async def query_too_slow(request: Request, exc: QueryCanceled):
+    """Handles queries that are cancelled because of statement_timeout.
+    
+    :param request: request that failed
+    :param exc: query exception raised
+    :return: 503 error
+    """
     log.warning("query cancelled by statement_timeout: %s", exc)
     return _error(request, 503, "query took too long, try a smaller time window")
 
 
 @app.exception_handler(OperationalError)
 async def database_unavailable(request: Request, exc: Exception):
+    """Handles database connection errors.
+    
+    :param request: request that failed
+    :param exc: operationalexception raised
+    :return: 503 error
+    """
     log.error("database unavailable: %s", exc)
     return _error(request, 503, "database unavailable")
 
 
 @app.exception_handler(PoolTimeout)
 async def pool_busy(request: Request, exc: PoolTimeout):
+    """Handles database pool timeout errors.
+    
+    :param request: request that failed
+    :param exc: pool timeout exception raised
+    :return: 503 error
+    """
     log.warning("no free database connections available: %s", exc)
     return _error(request, 503, "server busy, try again")
 
 
 @app.exception_handler(psycopg.Error)
 async def database_error(request: Request, exc: psycopg.Error):
+    """Handles other database errors.
+    
+    :param request: request that failed
+    :param exc: database error exception raised
+    :return: 500 error
+    """
     # Anything else from the database: log it, return JSON with the request ID.
     log.exception("database error: %s", exc)
     return _error(request, 500, "internal database error")
@@ -184,9 +238,12 @@ async def database_error(request: Request, exc: psycopg.Error):
 
 # input helpers
 def parse_time(value: Optional[str], name: str) -> Optional[float]:
-    """
-    parse time from epoch seconds/ISO-8601 to --> epoch seconds
+    """Parse time from epoch seconds/ISO-8601 to --> epoch seconds
     time without a zone is UTC
+
+    :param value: time as epoch seconds/ISO-8601 string
+    :param name: name of the query parameter for error msgs
+    :return: time in epoch seconds
     """
     if value is None:
         return None
@@ -208,11 +265,19 @@ def parse_time(value: Optional[str], name: str) -> Optional[float]:
 
 
 def check_window(start: Optional[float], end: Optional[float]) -> None:
+    """Checks that the time window is valid.
+    
+    :param start: window start in epoch seconds
+    :param end: window end in epoch seconds"""
     if start is not None and end is not None and start > end:
         raise HTTPException(400, "start-time must not be after end-time")
 
 
 def check_id(experiment_id: str) -> str:
+    """Checks that the experiment id is valid (can be stored in PostgeSQL).
+    
+    :param experiment_id: experiment id
+    :return: same experiment id if valid"""
     # postgres text cannot contain null bytes, so reject
     if "\x00" in experiment_id:
         raise HTTPException(422, "experiment-id must not contain NUL characters")
@@ -237,10 +302,17 @@ async def get_temperature(
     limit: Optional[int] = LIMIT,
     offset: int = OFFSET,
 ):
-    """
-    get averaged temperatures of 1 experiment
+    """Get averaged temperatures of 1 experiment.
         - start-time <= ts <= end-time, oldest first
-    unknown experiment/window without readings returns []
+        - unknown experiment/window without readings returns []
+
+    :param request: incoming request
+    :param experiment_id: experiment id
+    :param start_time: window start (inclusive) in epoch seconds/ISO-8601
+    :param end_time: window end (inclusive) in epoch seconds/ISO-8601
+    :param limit: optional maximum number of rows
+    :param offset: number of rows to skip
+    :return: list of averaged measurements
     """
     start, end = parse_time(start_time, "start-time"), parse_time(end_time, "end-time")
     check_window(start, end)
@@ -272,9 +344,16 @@ async def get_out_of_range(
     limit: Optional[int] = LIMIT,
     offset: int = OFFSET,
 ):
-    """
-    get out-of-range temperatures of 1 experiment
-    consumer flags those out-of-range temp, oldest first
+    """Get out-of-range temperatures of 1 experiment.
+        - consumer flags those out-of-range temp, oldest first
+
+    :param request: incoming request
+    :param experiment_id: experiment id 
+    :param start_time: optional window start in epoch seconds/ISO-8601
+    :param end_time: optional window end in epoch seconds/ISO-8601
+    :param limit: optional maximum number of rows
+    :param offset: number of rows to skip
+    :return: list of out-of-range measurements
     """
     start, end = parse_time(start_time, "start-time"), parse_time(end_time, "end-time")
     check_window(start, end)
@@ -298,6 +377,14 @@ async def get_series(
     end_time: str = Query(..., alias="end-time"),
     interval: float = Query(60, gt=0, description="Bucket width in seconds"),
 ):
+    """Get averaged temperatures of 1 experiment, grouped into time buckets.
+    
+    :param request: incoming request
+    :param experiment_id: experiment id
+    :param start_time: window start in epoch seconds/ISO-8601
+    :param end_time: window end in epoch seconds/ISO-8601
+    :param interval: bucket width in seconds
+    :return: list of aggregated measurements in time buckets"""
     if not math.isfinite(interval):
         raise HTTPException(422, "interval must be a finite number")
     start, end = parse_time(start_time, "start-time"), parse_time(end_time, "end-time")
@@ -316,12 +403,26 @@ async def list_experiments(
     limit: Optional[int] = LIMIT,
     offset: int = OFFSET,
 ):
+    """List of known experiments.
+    
+    :param request: incoming request
+    :param phase: optional filter by phase
+    :param limit: optional maximum number of rows
+    :param offset: number of rows to skip
+    :return: list of experiments
+    """
     return await db.list_experiments(request.app.state.pool, phase, limit, offset)
 
 
 @app.get("/experiments/{experiment_id}", response_model=Experiment, tags=["experiments"],
          summary="One experiment")
 async def get_experiment(request: Request, experiment_id: str):
+    """Get 1 experiment by id.
+    
+    :param request: incoming request
+    :param experiment_id: experiment id
+    :return: experiment
+    """
     exp = await db.get_experiment(request.app.state.pool, check_id(experiment_id))
     if exp is None:
         raise HTTPException(404, f"Experiment '{experiment_id}' not found")
@@ -336,6 +437,14 @@ async def get_stats(
     start_time: Optional[str] = Query(None, alias="start-time"),
     end_time: Optional[str] = Query(None, alias="end-time"),
 ):
+    """Get summary statistics of 1 experiment.
+
+    :param request: incoming request
+    :param experiment_id: experiment id
+    :param start_time: optional window start in epoch seconds/ISO-8601
+    :param end_time: optional window end in epoch seconds/ISO-8601
+    :return: summary statistics of the experiment
+    """
     start, end = parse_time(start_time, "start-time"), parse_time(end_time, "end-time")
     check_window(start, end)
     pool = request.app.state.pool
@@ -348,6 +457,11 @@ async def get_stats(
 @app.get("/health", response_model=Health, tags=["operations"],
          summary="Can the API answer queries? (503 if the database is down)")
 async def health(request: Request):
+    """Check if API and database are working or reachable.
+    
+    :param request: incoming request
+    :return: health status
+    """
     await db.ping(request.app.state.pool)
     return {"status": "ok"}
 
@@ -355,4 +469,8 @@ async def health(request: Request):
 @app.get("/health/live", response_model=Health, tags=["operations"],
          summary="Is the process up? (never touches the database)")
 async def live():
+    """Check if the API process is running, without touching the db.
+
+    :return: status
+    """
     return {"status": "ok"}
