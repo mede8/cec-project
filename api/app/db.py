@@ -39,7 +39,10 @@ def database_url() -> str:
 
 
 async def _configure(conn) -> None:
-    """Configure api connection to have read-only access."""
+    """Configure api connection to have read-only access.
+    
+    :param conn: db connection to configure
+    """
     await conn.execute("SET default_transaction_read_only = on")
 
 
@@ -73,7 +76,10 @@ async def create_pool() -> AsyncConnectionPool:
 
 
 async def ping(pool: AsyncConnectionPool) -> None:
-    """Ping db asynchronously to check if it is reachable."""
+    """Ping db asynchronously to check if it is reachable.
+    
+    :param pool: async connection pool
+    """
     async with pool.connection() as conn:
         await conn.execute("SELECT 1")
 
@@ -82,8 +88,8 @@ async def ping(pool: AsyncConnectionPool) -> None:
 def _json_points(where: str) -> str:
     """Query to return JSON of readings from a specific where from temperatures table.
 
-    :param where: strings that determines the position in JSON.
-    :returns: the string containing the information requested.
+    :param where: condition used in the `where` of the query
+    :returns: query string containing the information requested
     """
     return f"""
         SELECT coalesce(json_agg(page), '[]')::text AS body
@@ -115,16 +121,15 @@ _OUT_OF_RANGE_JSON = {
 async def temperatures_in_range(
         pool, experiment_id: str, start: float, end: float,
         limit: Optional[int], offset: int) -> str:
-    """Get json of the temperatures in range written by the consumer
+    """Get JSON of the temperatures in range written by the consumer.
+        - start <= ts <= end with oldest first
 
-    start <= ts <= end with oldest first
-
-    :param pool: the thread pool.
-    :param experiment_id: ID of experiment.
-    :param start: the requested start of the experiment.
-    :param end: the requested end time.
-    :param limit:
-    :param offset:
+    :param pool: async connection pool
+    :param experiment_id: experiment id
+    :param start: window start in epoch seconds
+    :param end: window end in epoch seconds
+    :param limit: optional maximum number of rows
+    :param offset: number of rows to skip
     :returns: if no limit then return all rows, otherwise json str of temperatures
               within specified range
     """
@@ -138,10 +143,16 @@ async def temperatures_in_range(
 async def out_of_range_temperatures(
         pool, experiment_id: str, start: Optional[float],
         end: Optional[float], limit: Optional[int], offset: int) -> str:
-    """Get json of out-of-range temperatures written by the consumer
-    just read flag from consumer with oldest first
+    """Get JSON of out-of-range temperatures written by the consumer.
+        - just read flag from consumer with oldest first
 
-    :returns: json str of out-of-range temperatures within specified range
+    :param pool: async connection pool
+    :param experiment_id: experiment id
+    :param start: optional window start in epoch seconds
+    :param end: optional window end in epoch seconds
+    :param limit: optional maximum number of rows
+    :param offset: number of rows to skip
+    :returns: JSON str of out-of-range temperatures within the range
     """
     sql = _OUT_OF_RANGE_JSON[(start is not None, end is not None)]
     t0 = time.perf_counter()
@@ -164,8 +175,13 @@ async def temperature_series(
         interval: float) -> list[dict]:
     """Get temperature series for an experiment, grouped into fixed-width time buckets (for charts)
     buckets are aligned to multiple intervals, so they have same start between req
-    ignor empty buckets
+    ignore empty buckets
 
+    :param pool: async connection pool
+    :param experiment_id: experiment id
+    :param start: window start in epoch seconds
+    :param end: window end in epoch seconds
+    :param interval: width of time buckets in seconds
     :returns: list of dict with temperature series in grouped buckets
     """
     async with pool.connection() as conn:
@@ -193,8 +209,10 @@ _EXPERIMENT_COLUMNS = """experiment_id, researcher, sensors, lower_threshold, up
 
 
 async def experiment_known(pool, experiment_id: str) -> bool:
-    """Check if the experiment is in experiments/temperatures tables
+    """Check if the experiment is in experiments/temperatures tables.
 
+    :param pool: async connection pool
+    :param experiment_id: experiment id
     :returns: true if experiment exists
     """
     async with pool.connection() as conn:
@@ -214,8 +232,10 @@ async def experiment_known(pool, experiment_id: str) -> bool:
 
 async def get_experiment(pool, experiment_id: str) -> Optional[dict]:
     """Get details from a specific experiment
-    check in experiments table and if not check in temperatures for minimal records
+        - check in experiments table and if not check in temperatures for minimal records
 
+    :param pool: async connection pool
+    :param experiment_id: experiment id
     :returns: dict with experiment or None if not found
     """
     async with pool.connection() as conn:
@@ -236,7 +256,11 @@ async def get_experiment(pool, experiment_id: str) -> Optional[dict]:
 
 async def list_experiments(pool, phase: Optional[str], limit: Optional[int], offset: int) -> list[dict]:
     """Get list of experiments and find from experiments table & temperatures filters by phase.
-
+    
+    :param pool: async connection pool
+    :param phase: optional filter by phase
+    :param limit: optional maximum number of rows
+    :param offset: number of rows to skip
     :returns: list of dict with experiments
     """
     async with pool.connection() as conn:
@@ -266,6 +290,10 @@ async def experiment_stats(
         end: Optional[float]) -> dict:
     """Gets summary of temperature statistics for an experiment
 
+    :param pool: async connection pool
+    :param experiment_id: experiment id
+    :param start: optional window start in epoch seconds
+    :param end: optional window end in epoch seconds
     :returns: dict with experiment temperature stats
     """
     async with pool.connection() as conn:
